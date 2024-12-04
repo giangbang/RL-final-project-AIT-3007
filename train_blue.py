@@ -98,11 +98,6 @@ def train():
                         if len(replay_buffer) > buffer_size:
                             replay_buffer.pop(0)
 
-                        # Huấn luyện mô hình nếu cần thiết
-                        if len(replay_buffer) >= batch_size and step_count % train_freq == 0:
-                            # Gọi hàm tối ưu mô hình
-                            optimize_model()
-
                         step_count += 1
 
                     env.step(action)
@@ -114,6 +109,10 @@ def train():
                         # Chính sách ngẫu nhiên cho agent red
                         action = random_policy(env, agent, obs)
                     env.step(action)
+
+            # Tối ưu mô hình sau khi tất cả agents đã thực hiện một bước
+            if len(replay_buffer) >= batch_size and step_count % train_freq == 0:
+                optimize_model()
 
         # Hiển thị thông tin sau mỗi tập
         print(f"Episode {episode + 1}/{num_episodes}, Total Reward: {total_reward:.2f}, Epsilon: {epsilon:.4f}")
