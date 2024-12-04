@@ -5,6 +5,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
 import os
+import random
 
 def train():
     env = battle_v4.env(map_size=45, max_cycles=300)
