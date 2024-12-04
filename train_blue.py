@@ -31,7 +31,9 @@ def train():
         if np.random.rand() < epsilon:
             return env.action_space("blue_0").sample()
         else:
-            state_tensor = torch.tensor(state, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0).to(device)
+            # Chuyển state thành numpy array trước nếu chưa phải
+            state = np.array(state)
+            state_tensor = torch.from_numpy(state).float().permute(2, 0, 1).unsqueeze(0).to(device)
             with torch.no_grad():
                 q_values = q_network(state_tensor)
             return q_values.argmax().item()
@@ -40,11 +42,19 @@ def train():
         batch = random.sample(replay_buffer, batch_size)
         states, actions, rewards, next_states, dones = zip(*batch)
 
-        states = torch.tensor(np.array(states), dtype=torch.float32).permute(0, 3, 1, 2).to(device)
-        actions = torch.tensor(actions, dtype=torch.int64).unsqueeze(1).to(device)
-        rewards = torch.tensor(rewards, dtype=torch.float32).to(device)
-        next_states = torch.tensor(next_states, dtype=torch.float32).permute(0, 3, 1, 2).to(device)
-        dones = torch.tensor(dones, dtype=torch.float32).to(device)
+        # Chuyển đổi thành numpy arrays trước
+        states = np.array(states)
+        next_states = np.array(next_states)
+        actions = np.array(actions)
+        rewards = np.array(rewards)
+        dones = np.array(dones)
+
+        # Sau đó chuyển thành tensors
+        states = torch.from_numpy(states).float().permute(0, 3, 1, 2).to(device)
+        next_states = torch.from_numpy(next_states).float().permute(0, 3, 1, 2).to(device)
+        actions = torch.from_numpy(actions).long().unsqueeze(1).to(device)
+        rewards = torch.from_numpy(rewards).float().to(device)
+        dones = torch.from_numpy(dones).float().to(device)
 
         q_values = q_network(states).gather(1, actions)
         with torch.no_grad():
