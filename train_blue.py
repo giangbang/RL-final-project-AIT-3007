@@ -35,7 +35,7 @@ def train():
                 q_values = q_network(state_tensor)
             return q_values.argmax().item()
 
-    num_episodes = 1000
+    num_episodes = 10
     epsilon_start = 1.0
     epsilon_end = 0.1
     epsilon_decay = 0.995
