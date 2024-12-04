@@ -36,6 +36,26 @@ def train():
                 q_values = q_network(state_tensor)
             return q_values.argmax().item()
 
+    def optimize_model():
+        batch = random.sample(replay_buffer, batch_size)
+        states, actions, rewards, next_states, dones = zip(*batch)
+
+        states = torch.tensor(np.array(states), dtype=torch.float32).permute(0, 3, 1, 2).to(device)
+        actions = torch.tensor(actions, dtype=torch.int64).unsqueeze(1).to(device)
+        rewards = torch.tensor(rewards, dtype=torch.float32).to(device)
+        next_states = torch.tensor(next_states, dtype=torch.float32).permute(0, 3, 1, 2).to(device)
+        dones = torch.tensor(dones, dtype=torch.float32).to(device)
+
+        q_values = q_network(states).gather(1, actions)
+        with torch.no_grad():
+            next_q_values = target_network(next_states).max(1)[0]
+        target_q_values = rewards + gamma * next_q_values * (1 - dones)
+
+        loss = F.mse_loss(q_values.squeeze(), target_q_values)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
     num_episodes = 10
     epsilon_start = 1.0
     epsilon_end = 0.1
@@ -59,47 +79,29 @@ def train():
                         action = None
                         done[agent] = True
                     else:
-                        state = observations[agent]
-                        action = select_action(state, epsilon)
-                        env.step(action)
-                        next_state = env.observe(agent)
-                        total_reward += reward
+                        # Lựa chọn hành động cho agent blue
+                        action = select_action(obs, epsilon)
 
-                        replay_buffer.append((state, action, reward, next_state, termination or truncation))
+                        # Lưu trữ thông tin để huấn luyện
+                        next_obs = env.observe(agent)
+                        replay_buffer.append((obs, action, reward, next_obs, termination or truncation))
                         if len(replay_buffer) > buffer_size:
                             replay_buffer.pop(0)
-                        observations[agent] = next_state
 
+                        # Huấn luyện mô hình nếu cần thiết
                         if len(replay_buffer) >= batch_size and step_count % train_freq == 0:
-                            # Optimize model
-                            batch = random.sample(replay_buffer, batch_size)
-                            states, actions, rewards, next_states, dones = zip(*batch)
-
-                            states = torch.tensor(np.array(states), dtype=torch.float32).permute(0, 3, 1, 2).to(device)
-                            actions = torch.tensor(actions, dtype=torch.int64).unsqueeze(1).to(device)
-                            rewards = torch.tensor(rewards, dtype=torch.float32).to(device)
-                            next_states = torch.tensor(next_states, dtype=torch.float32).permute(0, 3, 1, 2).to(device)
-                            dones = torch.tensor(dones, dtype=torch.float32).to(device)
-
-                            q_values = q_network(states).gather(1, actions)
-                            with torch.no_grad():
-                                next_q_values = target_network(next_states).max(1)[0]
-                            target_q_values = rewards + gamma * next_q_values * (1 - dones)
-
-                            loss = F.mse_loss(q_values.squeeze(), target_q_values)
-                            optimizer.zero_grad()
-                            loss.backward()
-                            optimizer.step()
-
-                        if step_count % target_update_freq == 0:
-                            target_network.load_state_dict(q_network.state_dict())
+                            # Gọi hàm tối ưu mô hình
+                            optimize_model()
 
                         step_count += 1
-                    epsilon = max(epsilon_end, epsilon * epsilon_decay)
+
+                    env.step(action)
+                    total_reward += reward
                 else:
                     if termination or truncation:
                         action = None
                     else:
+                        # Chính sách ngẫu nhiên cho agent red
                         action = random_policy(env, agent, obs)
                     env.step(action)
 
