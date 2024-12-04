@@ -75,7 +75,7 @@ def train():
                             batch = random.sample(replay_buffer, batch_size)
                             states, actions, rewards, next_states, dones = zip(*batch)
 
-                            states = torch.tensor(states, dtype=torch.float32).permute(0, 3, 1, 2).to(device)
+                            states = torch.tensor(np.array(states), dtype=torch.float32).permute(0, 3, 1, 2).to(device)
                             actions = torch.tensor(actions, dtype=torch.int64).unsqueeze(1).to(device)
                             rewards = torch.tensor(rewards, dtype=torch.float32).to(device)
                             next_states = torch.tensor(next_states, dtype=torch.float32).permute(0, 3, 1, 2).to(device)
