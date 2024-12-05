@@ -80,8 +80,15 @@ class RNNAgent(nn.Module):
         self.num_inputs = num_inputs
         self.action_shape = action_shape
         self.num_actions = num_actions
+        
+        self.cnn = nn.Sequential(
+            nn.Conv2d(5, 5, 3),
+            nn.ReLU(),
+            nn.Conv2d(5, 5, 3),
+            nn.ReLU(),
+        )
 
-        self.linear1 = nn.Linear(num_inputs+action_shape*num_actions, hidden_size) #845+64 -> 64
+        self.linear1 = nn.Linear(num_inputs+action_shape*num_actions, hidden_size) #405+21 -> 64
         self.linear2 = nn.Linear(hidden_size, hidden_size)  #64 -> 64
         self.rnn = nn.GRU(hidden_size, hidden_size) #64 -> 64
         self.linear3 = nn.Linear(hidden_size, hidden_size) #64 -> 64
@@ -102,7 +109,20 @@ class RNNAgent(nn.Module):
         action = F.one_hot(action, num_classes=self.num_actions).squeeze(-2)
         action = action.view(seq_len, bs, n_agents, -1) # [#batch, #sequence, #agent, action_shape*num_actions]
 
-        x = torch.cat([state, action], -1)  # the dim 0 is number of samples
+        # Feature extraction from 2D observation
+        # Reshape state to match CNN input requirements
+        x = state.view(seq_len, bs, n_agents, 13, 13, 5)  # Reshape to image dimensions
+        x = x.permute(0, 1, 2, 5, 3, 4)  # [seq_len, bs, n_agents, channels, height, width]
+        
+        # Process each agent's observation through CNN
+        batch_size = x.size(0) * x.size(1) * x.size(2)  # seq_len * bs * n_agents
+        x = x.reshape(batch_size, 5, 13, 13)  # Reshape for CNN processing
+        x = self.cnn(x)  # Apply CNN
+        x = x.reshape(seq_len, bs, n_agents, -1)  # Reshape back to original batch structure
+
+        # Concatenate with action
+        x = torch.cat([x, action], -1)
+
         x = x.view(seq_len, bs*n_agents, -1) # change x to [#sequence, #batch*#agent, -1] to meet rnn's input requirement
         hidden_in = hidden_in.view(1, bs*n_agents, -1)
         x = F.relu(self.linear1(x))

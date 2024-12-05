@@ -19,7 +19,7 @@ env = battle_v4.env(
     minimap_mode=False,
     extra_features=False,
 )
-state_dim = np.prod(env.observation_space("blue_0").shape)
+state_dim = 405
 action_dim = env.action_space("blue_0").n
 action_shape = 1
 env.reset()
