@@ -54,11 +54,11 @@ class ReplayBufferGRU:
             sample_len = len(state)
             start_idx = int((sample_len - min_seq_len)/2)
             end_idx = start_idx+min_seq_len
-            s_lst.append(state[start_idx:end_idx].to(device))  # Chuyển về GPU
-            a_lst.append(action[start_idx:end_idx].to(device))
-            la_lst.append(last_action[start_idx:end_idx].to(device))
-            r_lst.append(reward[start_idx:end_idx].to(device))
-            ns_lst.append(next_state[start_idx:end_idx].to(device))
+            s_lst.append(state[start_idx:end_idx])  # Chuyển về GPU
+            a_lst.append(action[start_idx:end_idx])
+            la_lst.append(last_action[start_idx:end_idx])
+            r_lst.append(reward[start_idx:end_idx])
+            ns_lst.append(next_state[start_idx:end_idx])
         return hi_lst, ho_lst, s_lst, a_lst, la_lst, r_lst, ns_lst
 
     def __len__(
