@@ -112,8 +112,8 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
         # Push entire episode to replay buffer
         if len(episode_states) > 0:
             learner.push_replay_buffer(
-                ini_hidden_states.cpu(),
-                hidden_states.cpu(),
+                ini_hidden_states,
+                hidden_states,
                 episode_states,
                 episode_actions,
                 episode_last_actions,
