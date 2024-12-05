@@ -221,8 +221,7 @@ class QMix(nn.Module):
         
         # Feature extraction from 2D observation
         states = self.feature_extractor(states)
-        print(states.shape)
-        exit()        
+    
         states = states.reshape(-1, self.state_dim)  # [#batch*#sequence, action_shape*#features*#agent]
         agent_qs = agent_qs.reshape(-1, 1, self.n_agents*self.action_shape)  # [#batch*#sequence, 1, #agent*#action_shape]
         # First layer
