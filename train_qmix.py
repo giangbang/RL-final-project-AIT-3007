@@ -3,12 +3,12 @@ import torch
 from magent2.environments import battle_v4
 from qmix import QMix_Trainer, ReplayBufferGRU
 from utils import get_states, exec_action
-replay_buffer_size = 8
+replay_buffer_size = 4
 hidden_dim = 64
 hypernet_dim = 128
 max_steps = 1000
 max_episodes = 640
-batch_size = 8
+batch_size = 4
 save_interval = batch_size
 target_update_interval = 10
 model_path = 'model/qmix'

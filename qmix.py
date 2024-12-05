@@ -43,7 +43,7 @@ class ReplayBufferGRU:
         for sample in batch:
             h_in, h_out, state, action, last_action, reward, next_state = sample
             min_seq_len = min(len(state), min_seq_len)
-            hi_lst.append(h_in.to(device))  # Chuyển về GPU
+            hi_lst.append(h_in.to(device))
             ho_lst.append(h_out.to(device))
         hi_lst = torch.cat(hi_lst, dim=-3).detach()
         ho_lst = torch.cat(ho_lst, dim=-3).detach()
@@ -54,7 +54,7 @@ class ReplayBufferGRU:
             sample_len = len(state)
             start_idx = int((sample_len - min_seq_len)/2)
             end_idx = start_idx+min_seq_len
-            s_lst.append(state[start_idx:end_idx])  # Chuyển về GPU
+            s_lst.append(state[start_idx:end_idx])
             a_lst.append(action[start_idx:end_idx])
             la_lst.append(last_action[start_idx:end_idx])
             r_lst.append(reward[start_idx:end_idx])
