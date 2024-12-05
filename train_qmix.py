@@ -29,7 +29,7 @@ env = battle_v4.env(
     minimap_mode=False,
     extra_features=False,
 )
-state_dim = 405
+state_dim = 80
 action_dim = env.action_space("blue_0").n
 action_shape = 1
 env.reset()
