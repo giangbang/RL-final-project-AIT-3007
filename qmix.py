@@ -288,8 +288,10 @@ class QMix_Trainer():
         
         self.criterion = nn.MSELoss()
 
-        self.optimizer = optim.Adam(
-            list(self.agent.parameters())+list(self.mixer.parameters()), lr=lr)
+        # self.optimizer = optim.Adam(
+        #     list(self.agent.parameters())+list(self.mixer.parameters()), lr=lr)
+        all_params = set(self.agent.parameters()) | set(self.mixer.parameters())
+        self.optimizer = optim.Adam(all_params, lr=lr)
 
     def sample_action(self):
         probs = torch.FloatTensor(
