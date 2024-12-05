@@ -8,8 +8,8 @@ hidden_dim = 64
 hypernet_dim = 128
 max_steps = 1000
 max_episodes = 640
-batch_size = 4
-save_interval = 1
+batch_size = 2
+save_interval = batch_size
 target_update_interval = 10
 model_path = 'model/qmix'
     
