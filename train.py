@@ -1,45 +1,17 @@
-from magent2.environments import battle_v4
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 from collections import deque
 import random
-import os
+from torch_model import QNetwork
+from magent2.environments import battle_v4
 
-# QNetwork architecture
-class QNetwork(nn.Module):
-    def __init__(self, input_shape, num_actions):
-        super().__init__()
-        self.conv = nn.Sequential(
-            nn.Conv2d(input_shape[2], 32, kernel_size=3, stride=1),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1),
-            nn.ReLU()
-        )
-        
-        # Tính toán kích thước đầu ra của conv layers
-        conv_out_size = self._get_conv_out(input_shape)
-        
-        self.fc = nn.Sequential(
-            nn.Linear(conv_out_size, 512),
-            nn.ReLU(),
-            nn.Linear(512, num_actions)
-        )
-    
-    def _get_conv_out(self, shape):
-        o = self.conv(torch.zeros(1, shape[2], shape[0], shape[1]))
-        return int(np.prod(o.size()))
-    
-    def forward(self, x):
-        conv_out = self.conv(x).view(x.size()[0], -1)
-        return self.fc(conv_out)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Replay Buffer để lưu trữ experience
 class ReplayBuffer:
-    def __init__(self, capacity):
+    def __init__(self, capacity=10000):
         self.buffer = deque(maxlen=capacity)
     
     def push(self, state, action, reward, next_state, done):
@@ -51,36 +23,22 @@ class ReplayBuffer:
     def __len__(self):
         return len(self.buffer)
 
-def train():
-    # Hyperparameters
-    BUFFER_SIZE = 100000
-    BATCH_SIZE = 64
-    GAMMA = 0.99
-    LEARNING_RATE = 1e-4
-    EPISODES = 1000
-    EPSILON_START = 1.0
-    EPSILON_END = 0.01
-    EPSILON_DECAY = 0.995
-
-    # Khởi tạo môi trường
-    env = battle_v4.env(map_size=45)
+# Training function
+def train_blue_agent(episodes=10, batch_size=128, gamma=0.99, epsilon_start=1.0, 
+                     epsilon_end=0.01, epsilon_decay=0.995):
+    env = battle_v4.env(map_size=45, render_mode=None)
     
-    # Khởi tạo mạng Q và optimizer
-    q_network = QNetwork(
-        env.observation_space("blue_0").shape,
-        env.action_space("blue_0").n
-    )
-    target_network = QNetwork(
-        env.observation_space("blue_0").shape,
-        env.action_space("blue_0").n
-    )
+    # Khởi tạo networks
+    q_network = QNetwork(env.observation_space("blue_0").shape, env.action_space("blue_0").n).to(device)
+    target_network = QNetwork(env.observation_space("blue_0").shape, env.action_space("blue_0").n).to(device)
     target_network.load_state_dict(q_network.state_dict())
     
-    optimizer = optim.Adam(q_network.parameters(), lr=LEARNING_RATE)
-    replay_buffer = ReplayBuffer(BUFFER_SIZE)
-    epsilon = EPSILON_START
-
-    for episode in range(EPISODES):
+    optimizer = optim.Adam(q_network.parameters(), lr=0.001)
+    criterion = nn.MSELoss()
+    replay_buffer = ReplayBuffer()
+    epsilon = epsilon_start
+    
+    for episode in range(episodes):
         env.reset()
         episode_reward = 0
         
@@ -88,50 +46,66 @@ def train():
             observation, reward, termination, truncation, info = env.last()
             
             if agent.startswith("blue"):
-                state = torch.FloatTensor(observation).permute(2, 0, 1).unsqueeze(0)
-                
-                # Epsilon-greedy action selection
-                if random.random() < epsilon:
-                    action = env.action_space(agent).sample()
+                # Kiểm tra termination/truncation trước khi quyết định action
+                if termination or truncation:
+                    action = None
                 else:
-                    with torch.no_grad():
-                        q_values = q_network(state)
-                        action = torch.argmax(q_values, dim=1).item()
+                    # Chuyển observation sang tensor
+                    state = torch.FloatTensor(observation).permute(2, 0, 1).unsqueeze(0).to(device)
+                    
+                    # Epsilon-greedy action selection
+                    if random.random() < epsilon:
+                        action = env.action_space(agent).sample()
+                    else:
+                        with torch.no_grad():
+                            q_values = q_network(state)
+                            action = torch.argmax(q_values, dim=1).item()
                 
-                # Thực hiện action và lưu experience
+                # Thực hiện action
                 env.step(action)
-                next_observation, next_reward, next_termination, next_truncation, next_info = env.last()
-                next_state = torch.FloatTensor(next_observation).permute(2, 0, 1).unsqueeze(0)
                 
-                replay_buffer.push(
-                    state, action, reward,
-                    next_state, termination or truncation
-                )
+                # Lấy next state
+                if not (termination or truncation):
+                    next_observation, _, _, _, _ = env.last()
+                    next_state = torch.FloatTensor(next_observation).permute(2, 0, 1).unsqueeze(0).to(device)
+                    done = False
+                else:
+                    next_state = state  # Dummy value khi episode kết thúc
+                    action = None
+                    done = True
                 
-                episode_reward += reward
+                # Lưu experience vào replay buffer
+                if not done:
+                    replay_buffer.push(state.cpu(), action, reward, next_state.cpu(), done)
                 
-                # Training
-                if len(replay_buffer) > BATCH_SIZE:
-                    batch = replay_buffer.sample(BATCH_SIZE)
+                # Training khi có đủ samples
+                if len(replay_buffer) > batch_size:
+                    batch = replay_buffer.sample(batch_size)
                     states, actions, rewards, next_states, dones = zip(*batch)
                     
-                    states = torch.cat(states)
-                    actions = torch.tensor(actions)
-                    rewards = torch.tensor(rewards, dtype=torch.float32)
-                    next_states = torch.cat(next_states)
-                    dones = torch.tensor(dones, dtype=torch.float32)
+                    states = torch.cat(states).to(device)
+                    actions = torch.LongTensor(actions).to(device)
+                    rewards = torch.FloatTensor(rewards).to(device)
+                    next_states = torch.cat(next_states).to(device)
+                    dones = torch.FloatTensor(dones).to(device)
                     
-                    current_q = q_network(states).gather(1, actions.unsqueeze(1))
-                    next_q = target_network(next_states).max(1)[0].detach()
-                    target_q = rewards + (1 - dones) * GAMMA * next_q
+                    # Tính current Q values
+                    current_q_values = q_network(states).gather(1, actions.unsqueeze(1))
                     
-                    loss = nn.MSELoss()(current_q.squeeze(), target_q)
+                    # Tính target Q values
+                    with torch.no_grad():
+                        next_q_values = target_network(next_states).max(1)[0]
+                        target_q_values = rewards + gamma * next_q_values * (1 - dones)
                     
+                    # Update network
+                    loss = criterion(current_q_values.squeeze(), target_q_values)
                     optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
-            
-            else:  # Random actions for other agents
+                
+                episode_reward += reward
+            else:
+                # Random action cho red agents
                 if termination or truncation:
                     action = None
                 else:
@@ -139,19 +113,28 @@ def train():
                 env.step(action)
         
         # Update target network
-        if episode % 10 == 0:
+        if episode % 1 == 0:
             target_network.load_state_dict(q_network.state_dict())
         
         # Decay epsilon
-        epsilon = max(EPSILON_END, epsilon * EPSILON_DECAY)
+        epsilon = max(epsilon_end, epsilon * epsilon_decay)
         
         print(f"Episode {episode}, Reward: {episode_reward}, Epsilon: {epsilon:.3f}")
         
-        # Save model periodically
-        if episode % 100 == 0:
-            torch.save(q_network.state_dict(), "blue.pt")
+        # Lưu model
+        if episode % 1 == 0:
+            torch.save(q_network.state_dict(), f"blue_agent_episode_{episode}.pt")
     
     env.close()
+    return q_network
 
-if __name__ == "__main__":
-    train()
+
+# Train agent
+import time
+start_time = time.time()
+
+trained_network = train_blue_agent()
+torch.save(trained_network.state_dict(), "blue.pt")
+
+end_time = time.time()
+print(f"Training took {end_time - start_time:.2f} seconds")

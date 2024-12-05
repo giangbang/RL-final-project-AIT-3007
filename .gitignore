@@ -20,3 +20,13 @@ docs/environments/*.md
 !docs/environments/index.md
 
 venv
+test.ipynb
+video/
+MARLlib/
+blue*.pt
+deep-marl-toolkit-main
+scripts
+model
+video
+final/.vscode/launch.json
+.vscode/launch.json
