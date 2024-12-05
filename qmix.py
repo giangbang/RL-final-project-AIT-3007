@@ -43,9 +43,9 @@ class ReplayBufferGRU:
         for sample in batch:
             h_in, h_out, state, action, last_action, reward, next_state = sample
             min_seq_len = min(len(state), min_seq_len)
-            hi_lst.append(h_in.to(device))
-            ho_lst.append(h_out.to(device))
-        hi_lst = torch.cat(hi_lst, dim=-3).detach()
+            hi_lst.append(h_in) # h_in: (1, batch_size=1, n_agents, hidden_size)
+            ho_lst.append(h_out)
+        hi_lst = torch.cat(hi_lst, dim=-3).detach()  # cat along the batch dim
         ho_lst = torch.cat(ho_lst, dim=-3).detach()
 
         # strip sequence length
