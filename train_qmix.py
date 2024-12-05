@@ -8,7 +8,7 @@ hidden_dim = 64
 hypernet_dim = 128
 max_steps = 1000
 max_episodes = 640
-batch_size = 2
+batch_size = 32
 save_interval = batch_size
 target_update_interval = 10
 model_path = 'model/qmix'
@@ -100,7 +100,7 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
             episode_rewards.append(rewards)
             episode_next_states.append(next_states)
             
-            episode_reward += np.mean(rewards)
+            episode_reward = rewards.sum() // n_agents
             last_actions = actions
             
         # print(np.stack(episode_states).shape) #(1000, 81, 845)
@@ -112,8 +112,8 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
         # Push entire episode to replay buffer
         if len(episode_states) > 0:
             learner.push_replay_buffer(
-                ini_hidden_states,
-                hidden_states,
+                ini_hidden_states.cpu(),
+                hidden_states.cpu(),
                 episode_states,
                 episode_actions,
                 episode_last_actions,
