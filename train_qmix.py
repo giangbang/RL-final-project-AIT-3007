@@ -3,7 +3,7 @@ import torch
 from magent2.environments import battle_v4
 from qmix import QMix_Trainer, ReplayBufferGRU
 from utils import get_states, exec_action
-replay_buffer_size = 4
+replay_buffer_size = 32
 hidden_dim = 64
 hypernet_dim = 128
 max_steps = 1000
