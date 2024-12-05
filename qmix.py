@@ -68,6 +68,26 @@ class ReplayBufferGRU:
     def get_length(self):
         return len(self.buffer)
 
+class CNNFeatureExtractor(nn.Module):
+    def __init__(self):
+        super(CNNFeatureExtractor, self).__init__()
+        self.cnn = nn.Sequential(
+            nn.Conv2d(5, 5, 3),
+            nn.ReLU(),
+            nn.Conv2d(5, 5, 3),
+            nn.ReLU(),
+        )
+
+    def forward(self, x):
+        # x shape: [..., 13, 13, 5]
+        # Permute để chuyển channels về đúng format của CNN
+        orig_shape = x.shape[:-3]
+        x = x.view(-1, 13, 13, 5)
+        x = x.permute(0, 3, 1, 2)  # [..., 5, 13, 13]
+        x = self.cnn(x)
+        x = x.reshape(*orig_shape, -1)  # Flatten CNN output
+        return x
+        
 class RNNAgent(nn.Module):
     '''
     @brief:
@@ -81,12 +101,7 @@ class RNNAgent(nn.Module):
         self.action_shape = action_shape
         self.num_actions = num_actions
         
-        self.cnn = nn.Sequential(
-            nn.Conv2d(5, 5, 3),
-            nn.ReLU(),
-            nn.Conv2d(5, 5, 3),
-            nn.ReLU(),
-        )
+        self.feature_extractor = CNNFeatureExtractor()
 
         self.linear1 = nn.Linear(num_inputs+action_shape*num_actions, hidden_size) #405+21 -> 64
         self.linear2 = nn.Linear(hidden_size, hidden_size)  #64 -> 64
@@ -103,26 +118,18 @@ class RNNAgent(nn.Module):
             qs: [#batch, #sequence, #agent, action_shape, num_actions]
         '''
         #  to [#sequence, #batch, #agent, #n_feature]
-        bs, seq_len, n_agents, _= state.shape
+        bs, seq_len, n_agents, _, _, _= state.shape
+        
+        # Feature extraction from 2D observation
+        state = self.feature_extractor(state)  # [batch, sequence, agents, cnn_features]
+
         state = state.permute(1, 0, 2, 3)
         action = action.permute(1, 0, 2, 3)
         action = F.one_hot(action, num_classes=self.num_actions).squeeze(-2)
         action = action.view(seq_len, bs, n_agents, -1) # [#batch, #sequence, #agent, action_shape*num_actions]
 
-        # Feature extraction from 2D observation
-        # Reshape state to match CNN input requirements
-        x = state.view(seq_len, bs, n_agents, 13, 13, 5)  # Reshape to image dimensions
-        x = x.permute(0, 1, 2, 5, 3, 4)  # [seq_len, bs, n_agents, channels, height, width]
-        
-        # Process each agent's observation through CNN
-        batch_size = x.size(0) * x.size(1) * x.size(2)  # seq_len * bs * n_agents
-        x = x.reshape(batch_size, 5, 13, 13)  # Reshape for CNN processing
-        x = self.cnn(x)  # Apply CNN
-        x = x.reshape(seq_len, bs, n_agents, -1)  # Reshape back to original batch structure
-
         # Concatenate with action
-        x = torch.cat([x, action], -1)
-
+        x = torch.cat([state, action], -1)
         x = x.view(seq_len, bs*n_agents, -1) # change x to [#sequence, #batch*#agent, -1] to meet rnn's input requirement
         hidden_in = hidden_in.view(1, bs*n_agents, -1)
         x = F.relu(self.linear1(x))
@@ -181,6 +188,8 @@ class QMix(nn.Module):
         self.embed_dim = embed_dim
         self.hypernet_embed = hypernet_embed
         self.abs = abs
+        
+        self.feature_extractor = CNNFeatureExtractor()
 
         self.hyper_w_1 = nn.Sequential(nn.Linear(self.state_dim, self.hypernet_embed),
                                         nn.ReLU(inplace=True),
@@ -209,6 +218,11 @@ class QMix(nn.Module):
         :return q_tot: (torch.Tensor) return q-total .
         """
         bs = agent_qs.size(0)
+        
+        # Feature extraction from 2D observation
+        states = self.feature_extractor(states)
+        print(states.shape)
+        exit()        
         states = states.reshape(-1, self.state_dim)  # [#batch*#sequence, action_shape*#features*#agent]
         agent_qs = agent_qs.reshape(-1, 1, self.n_agents*self.action_shape)  # [#batch*#sequence, 1, #agent*#action_shape]
         # First layer

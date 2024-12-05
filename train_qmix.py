@@ -89,6 +89,7 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
             next_states, rewards, terminations, truncations, infos = get_states(env, dead_agents)
             if len(next_states) == 0:  # No blue agents alive
                 break
+
             next_states = np.stack(next_states) # [n_agents, state_dim]
             rewards = np.stack(rewards) # [n_agents]
 

@@ -15,10 +15,10 @@ def get_states(env, dead_agents):
     observations, rewards, terminations, truncations, infos = [], [], [], [], []
     for agent in blue_agents:
         if agent in dead_agents:
-            observation, reward, termination, truncation, info = np.zeros(845), 0, True, False, {}
+            observation, reward, termination, truncation, info = np.zeros((13, 13, 5)), 0, True, False, {}
         else:
             try:
-                observation, reward, termination, truncation, info = env.observe(agent).reshape(-1), env._cumulative_rewards[agent], env.terminations[agent], env.truncations[agent], env.infos[agent]
+                observation, reward, termination, truncation, info = env.observe(agent), env._cumulative_rewards[agent], env.terminations[agent], env.truncations[agent], env.infos[agent]
             except Exception as e:
                 print(f"Error: {e}")
                 print(f"Dead agents: {dead_agents}")
