@@ -100,7 +100,7 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
             episode_rewards.append(rewards)
             episode_next_states.append(next_states)
             
-            episode_reward = rewards.sum() // n_agents
+            episode_reward = rewards.sum() / n_agents
             last_actions = actions
             
         # print(np.stack(episode_states).shape) #(1000, 81, 845)
