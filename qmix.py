@@ -11,12 +11,7 @@ import pickle
 import argparse
 import os
 
-GPU = True
-device_idx = 0
-if GPU:
-    device = torch.device("cuda:" + str(device_idx) if torch.cuda.is_available() else "cpu")
-else:
-    device = torch.device("cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)
 
 class ReplayBufferGRU:
@@ -143,6 +138,12 @@ class RNNAgent(nn.Module):
             action = np.argmax(agent_outs.detach().cpu().numpy(), axis=-1)
         else:
             action = dist.sample().squeeze(0).squeeze(0).detach().cpu().numpy()  # squeeze the added #batch and #sequence dimension
+        
+        # Clear unnecessary tensors
+        del state, last_action, hidden_in, agent_outs, dist
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            
         return action, hidden_out  # [n_agents, action_shape]
 
 class QMix(nn.Module):
@@ -282,6 +283,7 @@ class QMix_Trainer():
                                 episode_reward, episode_next_state)
 
     def update(self, batch_size):
+        # 1. Lấy batch từ replay buffer
         hidden_in, hidden_out, state, action, last_action, reward, next_state = self.replay_buffer.sample(
             batch_size)
         
@@ -298,21 +300,22 @@ class QMix_Trainer():
         last_action = torch.LongTensor(last_action).to(device)
         reward = torch.FloatTensor(reward).unsqueeze(-1).to(device) # reward is scalar, add 1 dim to be [reward] at the same dim
 
+        # 2. Tính current Q values
         agent_outs, _ = self.agent(state, last_action, hidden_in) # [#batch, #sequence, #agent, action_shape, num_actions]
-        
         chosen_action_qvals = torch.gather(  # [#batch, #sequence, #agent, action_shape]
             agent_outs, dim=-1, index=action.unsqueeze(-1)).squeeze(-1)
-
         qtot = self.mixer(chosen_action_qvals, state) # [#batch, #sequence, 1]
 
-        # target q
+        # 3. Tính target Q values
         target_agent_outs, _ = self.target_agent(next_state, action, hidden_out)
         target_max_qvals = target_agent_outs.max(dim=-1, keepdim=True)[0] # [#batch, #sequence, #agents, action_shape]
         target_qtot = self.target_mixer(target_max_qvals, next_state)
 
-        reward = reward[:, :, 0]  # reward is the same for agents, so take one
+        # 4. Tính reward và targets
+        reward = self._calc_reward(reward)
         targets = self._build_td_lambda_targets(reward, target_qtot)
 
+        # 5. Tính loss và update
         loss = self.criterion(qtot, targets.detach())
         self.optimizer.zero_grad()
         loss.backward()
@@ -342,6 +345,19 @@ class QMix_Trainer():
             target_param.data.copy_(param.data)
         for target_param, param in zip(self.target_agent.parameters(), self.agent.parameters()):
             target_param.data.copy_(param.data)
+
+    def _calc_reward(self, rewards):
+        # Tạo mask cho các agent còn sống (reward != 0)
+        alive_mask = (rewards != 0).float()  # [batch, sequence, agents, 1]
+        
+        # Tính tổng số agent còn sống tại mỗi timestep
+        num_alive = alive_mask.sum(dim=2, keepdim=True)  # [batch, sequence, 1, 1]
+        num_alive = torch.clamp(num_alive, min=1.0)  # Tránh chia cho 0
+        
+        # Tính mean reward chỉ cho các agent còn sống
+        rewards = (rewards * alive_mask).sum(dim=2, keepdim=True) / num_alive  # [batch, sequence, 1, 1]
+        rewards = rewards.squeeze(-1)  # [batch, sequence, 1]
+        return rewards
 
     def save_model(self, path):
         os.makedirs(os.path.dirname(path), exist_ok=True)

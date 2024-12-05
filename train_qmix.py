@@ -7,10 +7,10 @@ replay_buffer_size = 1e4
 hidden_dim = 64
 hypernet_dim = 128
 max_steps = 1000
-max_episodes = 64
+max_episodes = 640
 batch_size = 4
 save_interval = 1
-target_update_interval = 2
+target_update_interval = 10
 model_path = 'model/qmix'
     
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -50,7 +50,7 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
         # Clear memory after each episode
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        
+                   
         # Initialize hidden states for all blue agents
         hidden_states = torch.zeros(1, 1, n_agents, hidden_dim).to(device)
         ini_hidden_states = hidden_states.clone()
@@ -119,6 +119,11 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
                 episode_rewards,
                 episode_next_states
             )
+        
+        # Clear unnecessary tensors
+        del hidden_states
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         # Training step
         if len(replay_buffer) >= batch_size:
