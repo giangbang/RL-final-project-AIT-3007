@@ -100,7 +100,7 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
             episode_rewards.append(rewards)
             episode_next_states.append(next_states)
             
-            episode_reward = rewards.sum() / n_agents
+            episode_reward += rewards.sum()
             last_actions = actions
             
         # print(np.stack(episode_states).shape) #(1000, 81, 845)
@@ -134,7 +134,7 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
         if episode % save_interval == 0:
             learner.save_model(f"{model_path}_episode_{episode}")
             
-        print(f"Episode {episode}: Reward = {episode_reward:.2f}, Loss = {loss if loss else 'N/A'}")
+        print(f"Episode {episode}: Reward = {episode_reward/n_agents:.2f}, Loss = {loss if loss else 'N/A'}")
     
     # Save final model
     learner.save_model(model_path)
