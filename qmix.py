@@ -267,7 +267,7 @@ class QMix(nn.Module):
 
 
 class QMix_Trainer():
-    def __init__(self, replay_buffer, n_agents, state_dim, action_shape, action_dim, hidden_dim, hypernet_dim, target_update_interval, lr=0.001, logger=None):
+    def __init__(self, replay_buffer, n_agents, state_dim, action_shape, action_dim, hidden_dim, hypernet_dim, target_update_interval, lr=5e-4, logger=None):
         self.replay_buffer = replay_buffer
 
         self.action_dim = action_dim
@@ -292,8 +292,8 @@ class QMix_Trainer():
 
         # self.optimizer = optim.Adam(
         #     list(self.agent.parameters())+list(self.mixer.parameters()), lr=lr)
-        all_params = set(self.agent.parameters()) | set(self.mixer.parameters())
-        self.optimizer = optim.Adam(all_params, lr=lr)
+        self.all_params = set(self.agent.parameters()) | set(self.mixer.parameters())
+        self.optimizer = optim.Adam(self.all_params, lr=lr)
 
     def sample_action(self):
         probs = torch.FloatTensor(

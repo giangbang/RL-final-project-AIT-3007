@@ -11,6 +11,8 @@ parser = argparse.ArgumentParser(description='Train QMIX agents')
 parser.add_argument('--batch_size', type=int, default=4, help='batch size for training')
 parser.add_argument('--max_episodes', type=int, default=640, help='maximum number of episodes')
 parser.add_argument('--max_steps', type=int, default=1000, help='maximum steps per episode')
+parser.add_argument('--save_interval', type=int, default=20, help='interval to save model')
+
 args = parser.parse_args()
 
 replay_buffer_size = args.batch_size
@@ -19,7 +21,7 @@ hypernet_dim = 128
 max_steps = args.max_steps
 max_episodes = args.max_episodes
 batch_size = args.batch_size
-save_interval = args.batch_size
+save_interval = args.save_interval
 target_update_interval = 10
 model_path = 'model/qmix'
     
