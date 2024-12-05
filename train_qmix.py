@@ -42,7 +42,7 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
         save_interval: Interval to save model
         model_path: Path to save model
     """
-    
+    loss = None
     for episode in range(max_episodes):
         env.reset()
         episode_reward = 0
