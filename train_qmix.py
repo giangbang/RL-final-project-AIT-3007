@@ -8,10 +8,9 @@ hidden_dim = 64
 hypernet_dim = 128
 max_steps = 1000
 max_episodes = 64
-update_iter  = 1
 batch_size = 4
-save_interval = 10
-target_update_interval = 10
+save_interval = 1
+target_update_interval = 2
 model_path = 'model/qmix'
     
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
