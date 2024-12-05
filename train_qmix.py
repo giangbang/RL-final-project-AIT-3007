@@ -1,15 +1,25 @@
 import numpy as np
 import torch
+import argparse
+
 from magent2.environments import battle_v4
 from qmix import QMix_Trainer, ReplayBufferGRU
 from utils import get_states, exec_action
-replay_buffer_size = 4
+
+# Thêm đoạn parse arguments trước khi định nghĩa các biến
+parser = argparse.ArgumentParser(description='Train QMIX agents')
+parser.add_argument('--batch_size', type=int, default=4, help='batch size for training')
+parser.add_argument('--max_episodes', type=int, default=640, help='maximum number of episodes')
+parser.add_argument('--max_steps', type=int, default=1000, help='maximum steps per episode')
+args = parser.parse_args()
+
+replay_buffer_size = args.batch_size
 hidden_dim = 64
 hypernet_dim = 128
-max_steps = 1000
-max_episodes = 640
-batch_size = 4
-save_interval = batch_size
+max_steps = args.max_steps
+max_episodes = args.max_episodes
+batch_size = args.batch_size
+save_interval = args.batch_size
 target_update_interval = 10
 model_path = 'model/qmix'
     
@@ -42,6 +52,10 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
         save_interval: Interval to save model
         model_path: Path to save model
     """
+    learner.agent.train()
+    learner.target_agent.train()
+    learner.mixer.train()
+    learner.target_mixer.train()
     loss = None
     for episode in range(max_episodes):
         env.reset()
@@ -112,8 +126,8 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
         # Push entire episode to replay buffer
         if len(episode_states) > 0:
             learner.push_replay_buffer(
-                ini_hidden_states,
-                hidden_states,
+                ini_hidden_states.cpu(),
+                hidden_states.cpu(),
                 episode_states,
                 episode_actions,
                 episode_last_actions,
