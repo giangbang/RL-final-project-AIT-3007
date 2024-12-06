@@ -308,7 +308,7 @@ class QMix_Trainer():
         # 1. Lấy batch từ replay buffer
         hidden_in, hidden_out, state, action, last_action, reward, next_state = self.replay_buffer.sample(
             batch_size)
-        print(next_state.shape)
+
         # Converting the list to a single numpy.ndarray with numpy.array() before converting to a tensor.
         state = np.array(state)
         next_state = np.array(next_state) 
