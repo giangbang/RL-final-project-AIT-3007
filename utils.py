@@ -75,41 +75,22 @@ def make_action(actions, env, dead_agents):
     
     # action_shape=1 [81, 1] -> [81]
     actions = actions.reshape(-1)
-    observations, rewards, terminations, truncations, infos = [], [], [], [], []
-
     for _, agent in enumerate(env.agents):
-        # Process any dead agents before current agent's turn
+        #Handle dead agents
         while agent == env.agents[0] and env.agent_selection != env.agents[0]:
             dead_agents.append(env.agent_selection)
             env.step(None)
             
-        # Get agent's current state
+        # Handle dead agents
         _, _, termination, truncation, _ = env.last()
-                    
-        if agent.startswith("blue"):
-            #------- Blue Agent Logic -------#
-            if termination or truncation:
-                # Handle terminated/truncated blue agent
-                env.step(action=None)
-                observation, reward, termination, truncation, info = get_padding_states(env, agent)
-            else:
-                # Execute greedy action for blue agent
-                env.step(actions[blue_agents.index(agent)])
-                observation, reward, termination, truncation, info = get_agent_states(env, agent)
-            
-            # Store next state
-            observations.append(observation)
-            rewards.append(reward)
-            terminations.append(termination)
-            truncations.append(truncation)
-            infos.append(info)
+        if termination or truncation:
+            env.step(action=None)
         else:
-            #------- Red Agent Logic -------#
-            if termination or truncation:
-                # Handle terminated/truncated red agent
-                env.step(action=None)
+            # Blue agents move
+            if agent.startswith("blue"):
+                env.step(actions[blue_agents.index(agent)])
+            # Random red agents move
             else:
-                # Execute random action for red agent
                 env.step(env.action_space(agent).sample())
-    
-    return observations, rewards, terminations, truncations, infos, dead_agents
+
+    return dead_agents

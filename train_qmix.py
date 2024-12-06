@@ -118,7 +118,8 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
             next_states = []
             rewards = []
             # Save dead agents after making actions
-            next_states, rewards, terminations, truncations, infos, dead_agents = make_action(actions, env, dead_agents)
+            dead_agents = make_action(actions, env, dead_agents)
+            next_states, rewards, terminations, truncations, infos = get_all_states(env, dead_agents)
             if len(next_states) == 0:  # No blue agents alive
                 break
 
