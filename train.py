@@ -4,24 +4,10 @@ import torch.optim as optim
 import numpy as np
 from collections import deque
 import random
-from torch_model import QNetwork
+from torch_model import QNetwork, ReplayBuffer
 from magent2.environments import battle_v4
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# Replay Buffer để lưu trữ experience
-class ReplayBuffer:
-    def __init__(self, capacity=10000):
-        self.buffer = deque(maxlen=capacity)
-    
-    def push(self, state, action, reward, next_state, done):
-        self.buffer.append((state, action, reward, next_state, done))
-    
-    def sample(self, batch_size):
-        return random.sample(self.buffer, batch_size)
-    
-    def __len__(self):
-        return len(self.buffer)
 
 # Training function
 def train_blue_agent(episodes=10, batch_size=128, gamma=0.99, epsilon_start=1.0, 

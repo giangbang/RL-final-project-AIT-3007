@@ -97,14 +97,14 @@ class RNNAgent(nn.Module):
         evaluate Q value given a state and the action
     '''
 
-    def __init__(self, num_inputs, action_shape, num_actions, hidden_size, feature_extractor):
+    def __init__(self, num_inputs, action_shape, num_actions, hidden_size):
         super(RNNAgent, self).__init__()
 
         self.num_inputs = num_inputs
         self.action_shape = action_shape
         self.num_actions = num_actions
         
-        self.feature_extractor = feature_extractor
+        self.feature_extractor = CNNFeatureExtractor()
 
         self.linear1 = nn.Linear(num_inputs+action_shape*num_actions, hidden_size) #405+21 -> 64
         self.linear2 = nn.Linear(hidden_size, hidden_size)  #64 -> 64
@@ -177,7 +177,7 @@ class RNNAgent(nn.Module):
         return action, hidden_out  # [n_agents, action_shape]
 
 class QMix(nn.Module):
-    def __init__(self, state_dim, n_agents, action_shape, embed_dim=64, hypernet_embed=128, abs=True, feature_extractor=None):
+    def __init__(self, state_dim, n_agents, action_shape, embed_dim=64, hypernet_embed=128, abs=True):
         """
         Critic network class for Qmix. Outputs centralized value function predictions given independent q value.
         :param args: (argparse) arguments containing relevant model information.
@@ -192,7 +192,7 @@ class QMix(nn.Module):
         self.hypernet_embed = hypernet_embed
         self.abs = abs
         
-        self.feature_extractor = feature_extractor
+        self.feature_extractor = CNNFeatureExtractor()
 
         self.hyper_w_1 = nn.Sequential(nn.Linear(self.state_dim, self.hypernet_embed),
                                         nn.ReLU(inplace=True),
@@ -215,7 +215,7 @@ class QMix(nn.Module):
         Compute actions from the given inputs.
         @params:
             agent_qs: [#batch, #sequence, #agent, #action_shape]
-            states: [#batch, #sequence, #agent, #features*action_shape]
+            states: [#batch, #sequence, #agent, #features*action_shape] [2, 1000, (45, 45, 5)]
         :param agent_qs: q value inputs into network [batch_size, #agent, action_shape]
         :param states: state observation.
         :return q_tot: (torch.Tensor) return q-total .
@@ -245,27 +245,6 @@ class QMix(nn.Module):
         q_tot = y.view(bs, -1, 1) # [#batch, #sequence, 1]
         return q_tot
 
-    def k(self, states):
-        bs = states.size(0)
-        w1 = torch.abs(self.hyper_w_1(states))
-        w_final = torch.abs(self.hyper_w_final(states))
-        w1 = w1.view(-1, self.n_agents, self.embed_dim*self.action_shape)
-        w_final = w_final.view(-1, self.embed_dim*self.action_shape, 1)
-        k = torch.bmm(w1, w_final).view(bs, -1, self.n_agents)
-        k = k / torch.sum(k, dim=2, keepdim=True)
-        return k
-
-    def b(self, states):
-        bs = states.size(0)
-        w_final = torch.abs(self.hyper_w_final(states))
-        w_final = w_final.view(-1, self.embed_dim*self.action_shape, 1)
-        b1 = self.hyper_b_1(states)
-        b1 = b1.view(-1, 1, self.embed_dim*self.action_shape)
-        v = self.V(states).view(-1, 1, 1)
-        b = torch.bmm(b1, w_final) + v
-        return b
-
-
 class QMix_Trainer():
     def __init__(self, replay_buffer, n_agents, state_dim, action_shape, action_dim, hidden_dim, hypernet_dim, target_update_interval, lr=5e-4, logger=None):
         self.replay_buffer = replay_buffer
@@ -274,16 +253,15 @@ class QMix_Trainer():
         self.action_shape = action_shape
         self.n_agents = n_agents
         self.target_update_interval = target_update_interval
-        self.feature_extractor = CNNFeatureExtractor()
         self.agent = RNNAgent(state_dim, action_shape,
-                              action_dim, hidden_dim, feature_extractor=self.feature_extractor).to(device)
+                              action_dim, hidden_dim).to(device)
         self.target_agent = RNNAgent(
-            state_dim, action_shape, action_dim, hidden_dim, feature_extractor=self.feature_extractor).to(device)
+            state_dim, action_shape, action_dim, hidden_dim).to(device)
         
         self.mixer = QMix(state_dim, n_agents, action_shape,
-                          hidden_dim, hypernet_dim, feature_extractor=self.feature_extractor).to(device)
+                          hidden_dim, hypernet_dim).to(device)
         self.target_mixer = QMix(state_dim, n_agents, action_shape,
-                          hidden_dim, hypernet_dim, feature_extractor=self.feature_extractor).to(device)
+                          hidden_dim, hypernet_dim).to(device)
         
         self._update_targets()
         self.update_cnt = 0
