@@ -109,20 +109,20 @@ def train():
                 obs, reward, termination, truncation, _ = env.last()
                 agent_team = agent.split("_")[0]
 
-                if agent_team == "blue":
-                    if termination or truncation:
-                        action = None
-                        done[agent] = True
-                    else:
+                if termination or truncation:
+                    action = None
+                    done[agent] = True
+                else:
+                    if agent_team == "blue":
                         action = select_action(obs, epsilon)
                         next_obs = env.observe(agent)
                         replay_buffer.add(obs, action, reward, next_obs, termination or truncation)
                         step_count += 1
-                    env.step(action)
-                    total_reward += reward
-                else:
-                    action = env.action_space(agent).sample()
-                    env.step(action)
+                        total_reward += reward
+                    else:
+                        action = env.action_space(agent).sample()
+
+                env.step(action)
 
             if step_count % train_freq == 0:
                 optimize_model()
