@@ -3,12 +3,12 @@ import torch
 import argparse
 
 from magent2.environments import battle_v4
-from qmix import QMix_Trainer, ReplayBufferGRU
+from qmix import QMix_Trainer, ReplayBufferGRU, CNNFeatureExtractor
 from utils import get_all_states, make_action
 
 # Thêm đoạn parse arguments trước khi định nghĩa các biến
 parser = argparse.ArgumentParser(description='Train QMIX agents')
-parser.add_argument('--batch_size', type=int, default=4, help='batch size for training')
+parser.add_argument('--batch_size', type=int, default=2, help='batch size for training')
 parser.add_argument('--max_episodes', type=int, default=640, help='maximum number of episodes')
 parser.add_argument('--max_steps', type=int, default=1000, help='maximum steps per episode')
 parser.add_argument('--save_interval', type=int, default=20, help='interval to save model')
@@ -20,6 +20,7 @@ parser.add_argument('--epsilon_decay', type=float, default=0.985, help='Epsilon 
 
 args = parser.parse_args()
 
+dummy_cnn = CNNFeatureExtractor()
 replay_buffer_size = args.batch_size
 hidden_dim = 64
 hypernet_dim = 128
@@ -36,22 +37,25 @@ env = battle_v4.env(
     minimap_mode=False,
     extra_features=False,
 )
-state_dim = 80
+env.reset()
+obs_dim = dummy_cnn.get_output_dim(env.observation_space("blue_0").shape[:-1])
+state_dim = dummy_cnn.get_output_dim(env.state().shape[:-1])
 action_dim = env.action_space("blue_0").n
 action_shape = 1
-env.reset()
 n_agents = len(env.agents)//2
 
 replay_buffer = ReplayBufferGRU(replay_buffer_size)
 learner = QMix_Trainer(
-    replay_buffer, 
-    n_agents, 
-    state_dim, 
-    action_shape, 
-    action_dim, 
-    hidden_dim, 
-    hypernet_dim, 
-    target_update_interval,
+    replay_buffer=replay_buffer,
+    n_agents=n_agents,
+    obs_dim=obs_dim,
+    state_dim=state_dim,
+    action_shape=action_shape,
+    action_dim=action_dim,
+    hidden_dim=hidden_dim,
+    hypernet_dim=hypernet_dim,
+    target_update_interval=target_update_interval,
+    lr=5e-4,
     epsilon_start=args.epsilon_start,
     epsilon_end=args.epsilon_end,
     epsilon_decay=args.epsilon_decay
@@ -89,11 +93,13 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
         ini_hidden_states = hidden_states.clone()
         
         # Lists to store episode data
+        episode_observations = []
         episode_states = []
+        episode_next_states = []
         episode_actions = []
         episode_last_actions = []
         episode_rewards = []
-        episode_next_states = []
+        episode_next_observations = []
         
         # Initialize last actions as zeros
         last_actions = np.zeros((n_agents, action_shape))
@@ -106,32 +112,31 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
                 print("Environment truncated!!!")
                 break
             # Get all blue agents states and rewards
-            states, rewards, terminations, truncations, infos = get_all_states(env, dead_agents)
-            if len(states) == 0:  # No blue agents alive
+            observations, state, rewards, terminations, truncations, infos = get_all_states(env, dead_agents)
+            if len(observations) == 0:  # No blue agents alive
                 break
-            states = np.stack(states) # [n_agents, state_dim]
+            observations = np.stack(observations) # [n_agents, obs_dim]
 
             # Get actions from RNNAgent
-            actions, hidden_states = learner.get_action(states, last_actions, hidden_states)
+            actions, hidden_states = learner.get_action(observations, last_actions, hidden_states)
 
             # Execute actions and collect next states/rewards
-            next_states = []
-            rewards = []
             # Save dead agents after making actions
             dead_agents = make_action(actions, env, dead_agents)
-            next_states, rewards, terminations, truncations, infos = get_all_states(env, dead_agents)
-            if len(next_states) == 0:  # No blue agents alive
+            next_observations, next_state, rewards, terminations, truncations, infos = get_all_states(env, dead_agents)
+            if len(next_observations) == 0:  # No blue agents alive
                 break
-
-            next_states = np.stack(next_states) # [n_agents, state_dim]
+            next_observations = np.stack(next_observations) # [n_agents, obs_dim]
             rewards = np.stack(rewards) # [n_agents]
 
             # Store transition
-            episode_states.append(states)
+            episode_observations.append(observations)
+            episode_states.append(state)
+            episode_next_states.append(next_state)
             episode_actions.append(actions)
             episode_last_actions.append(last_actions)
             episode_rewards.append(rewards)
-            episode_next_states.append(next_states)
+            episode_next_observations.append(next_observations)
             
             episode_reward += rewards.sum()
             last_actions = actions
@@ -143,15 +148,19 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
         # print(np.stack(episode_next_states).shape) #(1000, 81, 845)
 
         # Push entire episode to replay buffer
-        if len(episode_states) > 0:
+        episode_states = np.stack(episode_states)
+        episode_next_states = np.stack(episode_next_states)
+        if len(episode_observations) > 0:
             learner.push_replay_buffer(
-                ini_hidden_states,
-                hidden_states,
-                episode_states,
-                episode_actions,
-                episode_last_actions,
-                episode_rewards,
-                episode_next_states
+                ini_hidden_in=ini_hidden_states,
+                ini_hidden_out=hidden_states,
+                episode_observation=episode_observations,
+                episode_state=episode_states,
+                episode_next_state=episode_next_states,
+                episode_action=episode_actions,
+                episode_last_action=episode_last_actions,
+                episode_reward=episode_rewards,
+                episode_next_observation=episode_next_observations
             )
         
         # Clear unnecessary tensors

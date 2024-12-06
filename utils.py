@@ -58,8 +58,8 @@ def get_all_states(env, dead_agents):
         terminations.append(termination)
         truncations.append(truncation)
         infos.append(info)
-    
-    return observations, rewards, terminations, truncations, infos
+    state = env.state()
+    return observations, state, rewards, terminations, truncations, infos
 
 def make_action(actions, env, dead_agents):
     """
