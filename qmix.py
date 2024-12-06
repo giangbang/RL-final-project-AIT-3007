@@ -97,12 +97,13 @@ class RNNAgent(nn.Module):
         evaluate Q value given a state and the action
     '''
 
-    def __init__(self, num_inputs, action_shape, num_actions, hidden_size):
+    def __init__(self, num_inputs, action_shape, num_actions, hidden_size, epsilon):
         super(RNNAgent, self).__init__()
 
         self.num_inputs = num_inputs
         self.action_shape = action_shape
         self.num_actions = num_actions
+        self.epsilon = epsilon
         
         self.feature_extractor = CNNFeatureExtractor()
 
@@ -149,7 +150,7 @@ class RNNAgent(nn.Module):
 
         return qs, hidden
 
-    def get_action(self, state, last_action, hidden_in, deterministic=False):
+    def get_action(self, state, last_action, hidden_in):
         '''
         @brief:
             for each distributed agent, generate action for one step given input data
@@ -164,11 +165,12 @@ class RNNAgent(nn.Module):
         agent_outs, hidden_out = self.forward(state, last_action, hidden_in)  # agents_out: [#batch, #sequence, n_agents, action_shape, action_dim]; hidden_out same as hidden_in
         dist = Categorical(agent_outs)
 
-        # if deterministic:
-        if np.random.rand() > 0.25:
-            action = np.argmax(agent_outs.detach().cpu().numpy(), axis=-1).squeeze(0).squeeze(0)  # squeeze the added #batch and #sequence dimension
-        else:
+        if np.random.rand() < self.epsilon:
+            # Random action
             action = dist.sample().squeeze(0).squeeze(0).detach().cpu().numpy()  # squeeze the added #batch and #sequence dimension
+        else:
+            # Greedy action
+            action = np.argmax(agent_outs.detach().cpu().numpy(), axis=-1).squeeze(0).squeeze(0)  # squeeze the added #batch and #sequence dimension
         
         # Clear unnecessary tensors
         del state, last_action, hidden_in, agent_outs, dist
@@ -247,17 +249,21 @@ class QMix(nn.Module):
         return q_tot
 
 class QMix_Trainer():
-    def __init__(self, replay_buffer, n_agents, state_dim, action_shape, action_dim, hidden_dim, hypernet_dim, target_update_interval, lr=5e-4, logger=None):
+    def __init__(self, replay_buffer, n_agents, state_dim, action_shape, action_dim, hidden_dim, hypernet_dim, target_update_interval, lr=5e-4, epsilon_start=1.0, epsilon_end=0.05, epsilon_decay=0.995):
         self.replay_buffer = replay_buffer
 
         self.action_dim = action_dim
         self.action_shape = action_shape
         self.n_agents = n_agents
         self.target_update_interval = target_update_interval
+        self.epsilon = epsilon_start
+        self.epsilon_end = epsilon_end
+        self.epsilon_decay = epsilon_decay
+        
         self.agent = RNNAgent(state_dim, action_shape,
-                              action_dim, hidden_dim).to(device)
+                              action_dim, hidden_dim, self.epsilon).to(device)
         self.target_agent = RNNAgent(
-            state_dim, action_shape, action_dim, hidden_dim).to(device)
+            state_dim, action_shape, action_dim, hidden_dim, epsilon=0.0).to(device)
         
         self.mixer = QMix(state_dim, n_agents, action_shape,
                           hidden_dim, hypernet_dim).to(device)
@@ -280,13 +286,13 @@ class QMix_Trainer():
 
         return action.type(torch.FloatTensor).numpy()
 
-    def get_action(self, state, last_action, hidden_in, deterministic=False):
+    def get_action(self, state, last_action, hidden_in):
         '''
         @return:
             action: w/ shape [#active_as]
         '''
 
-        action, hidden_out = self.agent.get_action(state, last_action, hidden_in, deterministic=deterministic)
+        action, hidden_out = self.agent.get_action(state, last_action, hidden_in)
 
         return action, hidden_out
 
@@ -302,7 +308,7 @@ class QMix_Trainer():
         # 1. Lấy batch từ replay buffer
         hidden_in, hidden_out, state, action, last_action, reward, next_state = self.replay_buffer.sample(
             batch_size)
-        
+        print(next_state.shape)
         # Converting the list to a single numpy.ndarray with numpy.array() before converting to a tensor.
         state = np.array(state)
         next_state = np.array(next_state) 
@@ -340,6 +346,10 @@ class QMix_Trainer():
         self.update_cnt += 1
         if self.update_cnt % self.target_update_interval == 0:
             self._update_targets()
+            
+        # Decay epsilon after each update
+        self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
+        self.agent.epsilon = self.epsilon
 
         return loss.item()
 

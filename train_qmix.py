@@ -4,7 +4,7 @@ import argparse
 
 from magent2.environments import battle_v4
 from qmix import QMix_Trainer, ReplayBufferGRU
-from utils import get_states, exec_action
+from utils import get_all_states, make_action
 
 # Thêm đoạn parse arguments trước khi định nghĩa các biến
 parser = argparse.ArgumentParser(description='Train QMIX agents')
@@ -13,6 +13,9 @@ parser.add_argument('--max_episodes', type=int, default=640, help='maximum numbe
 parser.add_argument('--max_steps', type=int, default=1000, help='maximum steps per episode')
 parser.add_argument('--save_interval', type=int, default=20, help='interval to save model')
 parser.add_argument('--target_update_interval', type=int, default=10, help='interval to update target network')
+parser.add_argument('--epsilon_start', type=float, default=1.0, help='Starting epsilon for exploration')
+parser.add_argument('--epsilon_end', type=float, default=0.05, help='Minimum epsilon value')
+parser.add_argument('--epsilon_decay', type=float, default=0.985, help='Epsilon decay rate')
 
 
 args = parser.parse_args()
@@ -40,7 +43,19 @@ env.reset()
 n_agents = len(env.agents)//2
 
 replay_buffer = ReplayBufferGRU(replay_buffer_size)
-learner = QMix_Trainer(replay_buffer, n_agents, state_dim, action_shape, action_dim, hidden_dim, hypernet_dim, target_update_interval)
+learner = QMix_Trainer(
+    replay_buffer, 
+    n_agents, 
+    state_dim, 
+    action_shape, 
+    action_dim, 
+    hidden_dim, 
+    hypernet_dim, 
+    target_update_interval,
+    epsilon_start=args.epsilon_start,
+    epsilon_end=args.epsilon_end,
+    epsilon_decay=args.epsilon_decay
+)
 
 def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=32, 
                     save_interval=100, model_path='model/qmix'):
@@ -91,7 +106,7 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
                 print("Environment truncated!!!")
                 break
             # Get all blue agents states and rewards
-            states, rewards, terminations, truncations, infos = get_states(env, dead_agents)
+            states, rewards, terminations, truncations, infos = get_all_states(env, dead_agents)
             if len(states) == 0:  # No blue agents alive
                 break
             states = np.stack(states) # [n_agents, state_dim]
@@ -103,8 +118,7 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
             next_states = []
             rewards = []
             # Save dead agents after making actions
-            dead_agents = exec_action(actions, env, dead_agents)
-            next_states, rewards, terminations, truncations, infos = get_states(env, dead_agents)
+            next_states, rewards, terminations, truncations, infos, dead_agents = make_action(actions, env, dead_agents)
             if len(next_states) == 0:  # No blue agents alive
                 break
 
