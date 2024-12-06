@@ -166,7 +166,7 @@ class RNNAgent(nn.Module):
 
         # if deterministic:
         if np.random.rand() > 0.25:
-            action = np.argmax(agent_outs.detach().cpu().numpy(), axis=-1)
+            action = np.argmax(agent_outs.detach().cpu().numpy(), axis=-1).squeeze(0).squeeze(0)  # squeeze the added #batch and #sequence dimension
         else:
             action = dist.sample().squeeze(0).squeeze(0).detach().cpu().numpy()  # squeeze the added #batch and #sequence dimension
         
