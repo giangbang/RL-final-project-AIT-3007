@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from magent2.environments import battle_v4
 from qmix import QMix_Trainer, ReplayBufferGRU
-from utils import get_states, exec_action
+from utils import get_all_states, make_action
 replay_buffer_size = 1e4
 hidden_dim = 64
 hypernet_dim = 128
@@ -70,7 +70,7 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
                 print("Environment truncated!!!")
                 break
             # Get all blue agents states and rewards
-            states, rewards, terminations, truncations, infos = get_states(env, dead_agents)
+            states, rewards, terminations, truncations, infos = get_all_states(env, dead_agents)
             if len(states) == 0:  # No blue agents alive
                 break
             states = np.stack(states) # [n_agents, state_dim]
@@ -82,8 +82,8 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
             next_states = []
             rewards = []
             # Save dead agents after making actions
-            dead_agents = exec_action(actions, env, dead_agents)
-            next_states, rewards, terminations, truncations, infos = get_states(env, dead_agents)
+            dead_agents = make_action(actions, env, dead_agents)
+            next_states, rewards, terminations, truncations, infos = get_all_states(env, dead_agents)
             if len(next_states) == 0:  # No blue agents alive
                 break
             next_states = np.stack(next_states) # [n_agents, state_dim]
