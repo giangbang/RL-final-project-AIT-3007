@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 import argparse
-
+import random
 from magent2.environments import battle_v4
 from qmix import QMix_Trainer, ReplayBufferGRU, CNNFeatureExtractor
 from utils import get_all_states, make_action
@@ -16,7 +16,7 @@ parser.add_argument('--target_update_interval', type=int, default=10, help='inte
 parser.add_argument('--epsilon_start', type=float, default=1.0, help='Starting epsilon for exploration')
 parser.add_argument('--epsilon_end', type=float, default=0.05, help='Minimum epsilon value')
 parser.add_argument('--epsilon_decay', type=float, default=0.985, help='Epsilon decay rate')
-
+parser.add_argument('--seed', type=int, default=42, help='random seed')
 
 args = parser.parse_args()
 
@@ -184,7 +184,20 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
     
     return learner
 
+def set_seed(seed):
+    print(seed)
+    """Set seed for reproducibility"""
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
 if __name__ == "__main__":
+    set_seed(args.seed)
     # Sử dụng hàm training
     trained_qmix = train_blue_qmix(
         env=env,
