@@ -164,7 +164,8 @@ class RNNAgent(nn.Module):
         agent_outs, hidden_out = self.forward(state, last_action, hidden_in)  # agents_out: [#batch, #sequence, n_agents, action_shape, action_dim]; hidden_out same as hidden_in
         dist = Categorical(agent_outs)
 
-        if deterministic:
+        # if deterministic:
+        if np.random.rand() > 0.25:
             action = np.argmax(agent_outs.detach().cpu().numpy(), axis=-1)
         else:
             action = dist.sample().squeeze(0).squeeze(0).detach().cpu().numpy()  # squeeze the added #batch and #sequence dimension
@@ -268,10 +269,8 @@ class QMix_Trainer():
         
         self.criterion = nn.MSELoss()
 
-        # self.optimizer = optim.Adam(
-        #     list(self.agent.parameters())+list(self.mixer.parameters()), lr=lr)
-        self.all_params = set(self.agent.parameters()) | set(self.mixer.parameters())
-        self.optimizer = optim.Adam(self.all_params, lr=lr)
+        self.optimizer = optim.Adam(
+            list(self.agent.parameters())+list(self.mixer.parameters()), lr=lr)
 
     def sample_action(self):
         probs = torch.FloatTensor(
