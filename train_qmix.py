@@ -12,6 +12,8 @@ parser.add_argument('--batch_size', type=int, default=4, help='batch size for tr
 parser.add_argument('--max_episodes', type=int, default=640, help='maximum number of episodes')
 parser.add_argument('--max_steps', type=int, default=1000, help='maximum steps per episode')
 parser.add_argument('--save_interval', type=int, default=20, help='interval to save model')
+parser.add_argument('--target_update_interval', type=int, default=10, help='interval to update target network')
+
 
 args = parser.parse_args()
 
@@ -22,7 +24,7 @@ max_steps = args.max_steps
 max_episodes = args.max_episodes
 batch_size = args.batch_size
 save_interval = args.save_interval
-target_update_interval = 10
+target_update_interval = args.target_update_interval
 model_path = 'model/qmix'
     
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
