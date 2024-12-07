@@ -148,8 +148,11 @@ class RNNAgent(nn.Module):
 
         # Concatenate with action
         # x = torch.cat([state, action], -1)
-        x = state
-        x = x.view(seq_len, bs*n_agents, -1) # change x to [#sequence, #batch*#agent, -1] to meet rnn's input requirement
+        # x = x.view(seq_len, bs*n_agents, -1) # change x to [#sequence, #batch*#agent, -1] to meet rnn's input requirement
+        
+        # Reshape for RNN input
+        x = state.reshape(seq_len, bs*n_agents, -1)  # [sequence, batch*agents, features]
+   
         hidden_in = hidden_in.view(1, bs*n_agents, -1)
         x = F.relu(self.linear1(x))
         x = F.relu(self.linear2(x))
