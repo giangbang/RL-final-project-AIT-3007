@@ -111,17 +111,17 @@ class RNNAgent(nn.Module):
         evaluate Q value given a state and the action
     '''
 
-    def __init__(self, num_inputs, action_shape, num_actions, hidden_size, epsilon):
+    def __init__(self, obs_dim, action_shape, num_actions, hidden_size, epsilon):
         super(RNNAgent, self).__init__()
 
-        self.num_inputs = num_inputs
+        self.obs_dim = obs_dim
         self.action_shape = action_shape
         self.num_actions = num_actions
         self.epsilon = epsilon
         
         self.feature_extractor = CNNFeatureExtractor()
 
-        self.linear1 = nn.Linear(num_inputs+action_shape*num_actions, hidden_size) #405+21 -> 64
+        self.linear1 = nn.Linear(obs_dim, hidden_size) #405+21 -> 64
         self.linear2 = nn.Linear(hidden_size, hidden_size)  #64 -> 64
         self.rnn = nn.GRU(hidden_size, hidden_size) #64 -> 64
         self.linear3 = nn.Linear(hidden_size, hidden_size) #64 -> 64
@@ -147,7 +147,8 @@ class RNNAgent(nn.Module):
         action = action.view(seq_len, bs, n_agents, -1) # [#batch, #sequence, #agent, action_shape*num_actions]
 
         # Concatenate with action
-        x = torch.cat([state, action], -1)
+        # x = torch.cat([state, action], -1)
+        x = state
         x = x.view(seq_len, bs*n_agents, -1) # change x to [#sequence, #batch*#agent, -1] to meet rnn's input requirement
         hidden_in = hidden_in.view(1, bs*n_agents, -1)
         x = F.relu(self.linear1(x))
@@ -409,9 +410,9 @@ class QMix_Trainer():
         torch.save(self.agent.state_dict(), path+'_agent')
         torch.save(self.mixer.state_dict(), path+'_mixer')
 
-    def load_model(self, path):
-        self.agent.load_state_dict(torch.load(path+'_agent'))
-        self.mixer.load_state_dict(torch.load(path+'_mixer'))
+    def load_model(self, path, map_location):
+        self.agent.load_state_dict(torch.load(path+'_agent', map_location=map_location))
+        self.mixer.load_state_dict(torch.load(path+'_mixer', map_location=map_location))
 
         self.agent.eval()
         self.mixer.eval()
