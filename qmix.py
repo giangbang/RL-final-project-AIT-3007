@@ -159,7 +159,6 @@ class RNNAgent(nn.Module):
         hidden_in = hidden_in.view(1, bs*n_agents, -1)
         x = F.relu(self.linear1(x))
         x = F.relu(self.linear2(x))
-        print(x.shape)
         x,  hidden = self.rnn(x, hidden_in)
         x = F.relu(self.linear3(x))
         x = self.linear4(x) # [#sequence, #batch, #agents, #action_shape*#actions]
