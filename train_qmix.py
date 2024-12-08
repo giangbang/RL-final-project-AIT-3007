@@ -36,6 +36,8 @@ env = battle_v4.env(
     map_size=45,
     minimap_mode=False,
     extra_features=False,
+    step_reward=0,
+    dead_penalty=0,
 )
 env.reset()
 obs_dim = dummy_cnn.get_output_dim(env.observation_space("blue_0").shape[:-1])
