@@ -28,20 +28,20 @@ class ReplayBufferGRU:
         self.buffer = []
         self.position = 0
 
-    def push(self, hidden_in, hidden_out, observation, state, next_state, action, last_action, reward, next_observation):      
+    def push(self, hidden_in, hidden_out, observation, state, next_state, action, reward, next_observation):      
         if len(self.buffer) < self.capacity:
             self.buffer.append(None)
         self.buffer[self.position] = (
-            hidden_in, hidden_out, observation, state, next_state, action, last_action, reward, next_observation)
+            hidden_in, hidden_out, observation, state, next_state, action, reward, next_observation)
         self.position = int((self.position + 1) %
                             self.capacity)  # as a ring buffer
 
     def sample(self, batch_size):
-        obs_lst, a_lst, la_lst, r_lst, nobs_lst, hi_lst, ho_lst, s_lst, ns_lst = [], [], [], [], [], [], [], [], []
+        obs_lst, a_lst, r_lst, nobs_lst, hi_lst, ho_lst, s_lst, ns_lst = [], [], [], [], [], [], [], []
         batch = random.sample(self.buffer, batch_size)
         min_seq_len = float('inf')
         for sample in batch:
-            h_in, h_out, observation, state, next_state, action, last_action, reward, next_observation = sample
+            h_in, h_out, observation, state, next_state, action, reward, next_observation = sample
             min_seq_len = min(len(observation), min_seq_len)
             hi_lst.append(h_in) # h_in: (1, batch_size=1, n_agents, hidden_size)
             ho_lst.append(h_out)
@@ -50,7 +50,7 @@ class ReplayBufferGRU:
 
         # strip sequence length
         for sample in batch:
-            h_in, h_out, observation, state, next_state, action, last_action, reward, next_observation = sample
+            h_in, h_out, observation, state, next_state, action, reward, next_observation = sample
             sample_len = len(observation)
             start_idx = int((sample_len - min_seq_len)/2)
             end_idx = start_idx+min_seq_len
@@ -58,10 +58,9 @@ class ReplayBufferGRU:
             s_lst.append(state[start_idx:end_idx])
             ns_lst.append(next_state[start_idx:end_idx])
             a_lst.append(action[start_idx:end_idx])
-            la_lst.append(last_action[start_idx:end_idx])
             r_lst.append(reward[start_idx:end_idx])
             nobs_lst.append(next_observation[start_idx:end_idx])
-        return hi_lst, ho_lst, obs_lst, s_lst, ns_lst, a_lst, la_lst, r_lst, nobs_lst
+        return hi_lst, ho_lst, obs_lst, s_lst, ns_lst, a_lst, r_lst, nobs_lst
 
     def __len__(
             self):  # cannot work in multiprocessing case, len(replay_buffer) is not available in proxy of manager!
@@ -121,13 +120,13 @@ class RNNAgent(nn.Module):
         
         self.feature_extractor = CNNFeatureExtractor()
 
-        self.linear1 = nn.Linear(obs_dim, hidden_size) #405+21 -> 64
+        self.linear1 = nn.Linear(obs_dim, hidden_size) #80+21 -> 64
         self.linear2 = nn.Linear(hidden_size, hidden_size)  #64 -> 64
         self.rnn = nn.GRU(hidden_size, hidden_size) #64 -> 64
         self.linear3 = nn.Linear(hidden_size, hidden_size) #64 -> 64
         self.linear4 = nn.Linear(hidden_size, action_shape*num_actions) #64 -> 21
 
-    def forward(self, state, action, hidden_in):
+    def forward(self, state, hidden_in):
         '''
         @params:
             state: [#batch, #sequence, #agent, #n_feature]
@@ -135,27 +134,32 @@ class RNNAgent(nn.Module):
         @return:
             qs: [#batch, #sequence, #agent, action_shape, num_actions]
         '''
-        #  to [#sequence, #batch, #agent, #n_feature]
-        bs, seq_len, n_agents, _, _, _= state.shape
-        
+        # Check the shape of state to determine if it's training or inference
+        if len(state.shape) == 6:
+            # Training mode
+            bs, seq_len, n_agents, _, _, _ = state.shape
+        elif len(state.shape) == 5:
+            # Inference mode
+            bs, seq_len, _, _, _ = state.shape
+            n_agents = 1  # Set n_agents to 1 for inference
+            state = state.unsqueeze(2)  # Add agent dimension
+        else:
+            raise ValueError("Invalid state shape. Expected 5 or 6 dimensions.")
+                
         # Feature extraction from 2D observation
         state = self.feature_extractor(state)  # [batch, sequence, agents, cnn_features]
 
         state = state.permute(1, 0, 2, 3)
-        action = action.permute(1, 0, 2, 3)
-        action = F.one_hot(action, num_classes=self.num_actions).squeeze(-2)
-        action = action.view(seq_len, bs, n_agents, -1) # [#batch, #sequence, #agent, action_shape*num_actions]
-
         # Concatenate with action
         # x = torch.cat([state, action], -1)
         # x = x.view(seq_len, bs*n_agents, -1) # change x to [#sequence, #batch*#agent, -1] to meet rnn's input requirement
         
         # Reshape for RNN input
-        x = state.reshape(seq_len, bs*n_agents, -1)  # [sequence, batch*agents, features]
-   
+        x = state.reshape(seq_len, bs*n_agents, -1)  # [sequence, batch*agents, features]   
         hidden_in = hidden_in.view(1, bs*n_agents, -1)
         x = F.relu(self.linear1(x))
         x = F.relu(self.linear2(x))
+        print(x.shape)
         x,  hidden = self.rnn(x, hidden_in)
         x = F.relu(self.linear3(x))
         x = self.linear4(x) # [#sequence, #batch, #agents, #action_shape*#actions]
@@ -168,19 +172,16 @@ class RNNAgent(nn.Module):
 
         return qs, hidden
 
-    def get_action(self, state, last_action, hidden_in):
+    def get_action(self, state, hidden_in):
         '''
         @brief:
             for each distributed agent, generate action for one step given input data
         @params:
             state: [n_agents, n_feature]
-            last_action: [n_agents, action_shape]
         '''
-        state = torch.FloatTensor(state).unsqueeze(0).unsqueeze(0).to(device) # add #sequence and #batch: [[#batch, #sequence, n_agents, n_feature]] 
-        last_action = torch.LongTensor(
-            last_action).unsqueeze(0).unsqueeze(0).to(device)  # add #sequence and #batch: [#batch, #sequence, n_agents, action_shape]
+        state = torch.FloatTensor(state).unsqueeze(0).unsqueeze(0).to(device) # add #sequence and #batch: [[#batch, #sequence, n_agents, n_feature]]
         hidden_in = hidden_in.unsqueeze(1) # add #batch: [#batch, n_agents, hidden_dim]
-        agent_outs, hidden_out = self.forward(state, last_action, hidden_in)  # agents_out: [#batch, #sequence, n_agents, action_shape, action_dim]; hidden_out same as hidden_in
+        agent_outs, hidden_out = self.forward(state, hidden_in)  # agents_out: [#batch, #sequence, n_agents, action_shape, action_dim]; hidden_out same as hidden_in
         dist = Categorical(agent_outs)
 
         if np.random.rand() < self.epsilon:
@@ -189,9 +190,9 @@ class RNNAgent(nn.Module):
         else:
             # Greedy action
             action = np.argmax(agent_outs.detach().cpu().numpy(), axis=-1).squeeze(0).squeeze(0)  # squeeze the added #batch and #sequence dimension
-        
+
         # Clear unnecessary tensors
-        del state, last_action, hidden_in, agent_outs, dist
+        del state, hidden_in, agent_outs, dist
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             
@@ -304,27 +305,27 @@ class QMix_Trainer():
 
         return action.type(torch.FloatTensor).numpy()
 
-    def get_action(self, state, last_action, hidden_in):
+    def get_action(self, state, hidden_in):
         '''
         @return:
             action: w/ shape [#active_as]
         '''
 
-        action, hidden_out = self.agent.get_action(state, last_action, hidden_in)
+        action, hidden_out = self.agent.get_action(state, hidden_in)
 
         return action, hidden_out
 
-    def push_replay_buffer(self, ini_hidden_in, ini_hidden_out, episode_observation, episode_state, episode_next_state, episode_action, episode_last_action,
+    def push_replay_buffer(self, ini_hidden_in, ini_hidden_out, episode_observation, episode_state, episode_next_state, episode_action,
                            episode_reward, episode_next_observation):
         '''
         @brief: push arguments into replay buffer
         '''
-        self.replay_buffer.push(ini_hidden_in, ini_hidden_out, episode_observation, episode_state, episode_next_state, episode_action, episode_last_action,
+        self.replay_buffer.push(ini_hidden_in, ini_hidden_out, episode_observation, episode_state, episode_next_state, episode_action,
                                 episode_reward, episode_next_observation)
 
     def update(self, batch_size):
         # 1. Lấy batch từ replay buffer
-        hidden_in, hidden_out, observation, state, next_state, action, last_action, reward, next_observation = self.replay_buffer.sample(
+        hidden_in, hidden_out, observation, state, next_state, action, reward, next_observation = self.replay_buffer.sample(
             batch_size)
 
         # Converting the list to a single numpy.ndarray with numpy.array() before converting to a tensor.
@@ -333,7 +334,6 @@ class QMix_Trainer():
         next_state = np.array(next_state)
         next_observation = np.array(next_observation) 
         action = np.array(action)
-        last_action = np.array(last_action)
         reward = np.array(reward)
         
         observation = torch.FloatTensor(observation).to(device) # [#batch, sequence, #agents, #features*action_shape]
@@ -341,17 +341,16 @@ class QMix_Trainer():
         next_state = torch.FloatTensor(next_state).to(device)
         next_observation = torch.FloatTensor(next_observation).to(device)
         action = torch.LongTensor(action).to(device) # [#batch, sequence, #agents, #action_shape]
-        last_action = torch.LongTensor(last_action).to(device)
         reward = torch.FloatTensor(reward).unsqueeze(-1).to(device) # reward is scalar, add 1 dim to be [reward] at the same dim
 
         # 2. Tính current Q values
-        agent_outs, _ = self.agent(observation, last_action, hidden_in) # [#batch, #sequence, #agent, action_shape, num_actions]
+        agent_outs, _ = self.agent(observation, hidden_in) # [#batch, #sequence, #agent, action_shape, num_actions]
         chosen_action_qvals = torch.gather(  # [#batch, #sequence, #agent, action_shape]
             agent_outs, dim=-1, index=action.unsqueeze(-1)).squeeze(-1)
         qtot = self.mixer(chosen_action_qvals, state) # [#batch, #sequence, 1]
 
         # 3. Tính target Q values
-        target_agent_outs, _ = self.target_agent(next_observation, action, hidden_out)
+        target_agent_outs, _ = self.target_agent(next_observation, hidden_out)
         target_max_qvals = target_agent_outs.max(dim=-1, keepdim=True)[0] # [#batch, #sequence, #agents, action_shape]
         target_qtot = self.target_mixer(target_max_qvals, next_state)
 

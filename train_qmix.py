@@ -87,7 +87,7 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
         # Clear memory after each episode
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-                   
+
         # Initialize hidden states for all blue agents
         hidden_states = torch.zeros(1, 1, n_agents, hidden_dim).to(device)
         ini_hidden_states = hidden_states.clone()
@@ -97,12 +97,9 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
         episode_states = []
         episode_next_states = []
         episode_actions = []
-        episode_last_actions = []
         episode_rewards = []
         episode_next_observations = []
         
-        # Initialize last actions as zeros
-        last_actions = np.zeros((n_agents, action_shape))
         # Init dead agents list
         dead_agents = []
         
@@ -118,7 +115,7 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
             observations = np.stack(observations) # [n_agents, obs_dim]
 
             # Get actions from RNNAgent
-            actions, hidden_states = learner.get_action(observations, last_actions, hidden_states)
+            actions, hidden_states = learner.get_action(observations, hidden_states)
 
             # Execute actions and collect next states/rewards
             # Save dead agents after making actions
@@ -134,16 +131,13 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
             episode_states.append(state)
             episode_next_states.append(next_state)
             episode_actions.append(actions)
-            episode_last_actions.append(last_actions)
             episode_rewards.append(rewards)
             episode_next_observations.append(next_observations)
             
             episode_reward += rewards.sum()
-            last_actions = actions
             
         # print(np.stack(episode_states).shape) #(1000, 81, 845)
         # print(np.stack(episode_actions).shape) #(1000, 81, 1)
-        # print(np.stack(episode_last_actions).shape) #(1000, 81, 1)
         # print(np.stack(episode_rewards).shape) #(1000, 81)
         # print(np.stack(episode_next_states).shape) #(1000, 81, 845)
 
@@ -158,7 +152,6 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
                 episode_state=episode_states,
                 episode_next_state=episode_next_states,
                 episode_action=episode_actions,
-                episode_last_action=episode_last_actions,
                 episode_reward=episode_rewards,
                 episode_next_observation=episode_next_observations
             )
