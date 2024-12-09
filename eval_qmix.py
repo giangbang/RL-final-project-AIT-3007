@@ -1,4 +1,5 @@
 import os
+import time
 import numpy as np
 import torch
 import cv2
@@ -36,8 +37,8 @@ def get_blue_policy(model_path, hidden_dim=64, hypernet_dim=128):
         hidden_dim=hidden_dim,
         hypernet_dim=hypernet_dim,
         target_update_interval=10,
-        epsilon_start=1.0,  # Không cần epsilon vì đang evaluate
-        epsilon_end=1.0,
+        epsilon_start=0.0,  # Không cần epsilon vì đang evaluate
+        epsilon_end=0.0,
         epsilon_decay=1.0
     )
     
@@ -148,9 +149,10 @@ def evaluate(env, blue_policy, red_policy, n_episodes=100, max_cycles=1000, save
         
         if save_video and frames:
             height, width, _ = frames[0].shape
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
             out = cv2.VideoWriter(
-                os.path.join(vid_dir, f"qmix_eval.mp4"),
-                cv2.VideoWriter_fourcc(*"mp4v"),
+                os.path.join(vid_dir, f"qmix_eval_{timestamp}.mp4"),
+                cv2.VideoWriter_fourcc(*"mp4v"), 
                 fps,
                 (width, height),
             )
