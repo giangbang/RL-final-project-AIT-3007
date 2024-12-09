@@ -40,34 +40,23 @@ def eval():
 
         for _ in tqdm(range(n_episode)):
             env.reset()
-            n_dead = {"red": 0, "blue": 0}
+            n_kill = {"red": 0, "blue": 0}
             red_reward, blue_reward = 0, 0
-            who_loses = None
 
             for agent in env.agent_iter():
                 observation, reward, termination, truncation, info = env.last()
                 agent_team = agent.split("_")[0]
+
+                n_kill[agent_team] += (
+                    reward > 4.5
+                )  # This assumes default reward settups
                 if agent_team == "red":
                     red_reward += reward
                 else:
                     blue_reward += reward
 
-                if env.unwrapped.frames >= max_cycles and who_loses is None:
-                    who_loses = "red" if n_dead["red"] > n_dead["blue"] + 5 else "draw"
-                    who_loses = (
-                        "blue" if n_dead["red"] + 5 < n_dead["blue"] else who_loses
-                    )
-
                 if termination or truncation:
                     action = None  # this agent has died
-                    n_dead[agent_team] = n_dead[agent_team] + 1
-
-                    if (
-                        n_dead[agent_team] == n_agent_each_team
-                        and who_loses
-                        is None  # all agents are terminated at the end of episodes
-                    ):
-                        who_loses = agent_team
                 else:
                     if agent_team == "red":
                         action = red_policy(env, agent, observation)
@@ -76,8 +65,10 @@ def eval():
 
                 env.step(action)
 
-            red_win.append(who_loses == "blue")
-            blue_win.append(who_loses == "red")
+            who_wins = "red" if n_kill["red"] >= n_kill["blue"] + 5 else "draw"
+            who_wins = "blue" if n_kill["red"] + 5 <= n_kill["blue"] else who_wins
+            red_win.append(who_wins == "red")
+            blue_win.append(who_wins == "blue")
 
             red_tot_rw.append(red_reward / n_agent_each_team)
             blue_tot_rw.append(blue_reward / n_agent_each_team)
