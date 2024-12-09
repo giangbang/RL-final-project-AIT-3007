@@ -412,8 +412,8 @@ class QMix_Trainer():
         torch.save(self.mixer.state_dict(), path+'_mixer')
 
     def load_model(self, path, map_location):
-        self.agent.load_state_dict(torch.load(path+'_agent', map_location=map_location))
-        self.mixer.load_state_dict(torch.load(path+'_mixer', map_location=map_location))
+        self.agent.load_state_dict(torch.load(path+'_agent', map_location=map_location, weights_only=True))
+        self.mixer.load_state_dict(torch.load(path+'_mixer', map_location=map_location, weights_only=True))
 
         self.agent.eval()
         self.mixer.eval()
