@@ -1,0 +1,33 @@
+# Training settings
+seed: 42
+save_dir: "model"
+
+# Model parameters 
+hidden_dim: 64
+hypernet_dim: 128
+
+# Training parameters
+batch_size: 2
+max_steps: 1000
+save_interval: 20
+target_update_interval: 10
+lr: 5e-4
+
+# Epsilon settings
+epsilon_start: 1.0
+epsilon_end: 0.05
+epsilon_decay: 0.985
+
+# Stage 1 settings
+stage1:
+  episodes: 100
+  lambda_env: 0.0
+  lambda_strategy: 1.0
+  model_dir: "stage1"
+
+# Stage 2 settings  
+stage2:
+  episodes: 900
+  lambda_env: 1.0
+  lambda_strategy: 1.0
+  model_dir: "stage2"

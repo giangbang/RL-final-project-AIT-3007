@@ -17,6 +17,8 @@ parser.add_argument('--epsilon_start', type=float, default=1.0, help='Starting e
 parser.add_argument('--epsilon_end', type=float, default=0.05, help='Minimum epsilon value')
 parser.add_argument('--epsilon_decay', type=float, default=0.985, help='Epsilon decay rate')
 parser.add_argument('--seed', type=int, default=42, help='random seed')
+parser.add_argument('--lambda_env', type=int, default=0, help='Weight reward from enviroment')
+parser.add_argument('--lambda_strategy', type=int, default=1, help='Weight reward from Lanchester strategy')
 
 args = parser.parse_args()
 
@@ -36,9 +38,7 @@ env = battle_v4.env(
     map_size=45,
     minimap_mode=False,
     extra_features=False,
-    step_reward=0.001,
-    dead_penalty=0,
-    max_cycles=2e4
+    max_cycles=300
 )
 env.reset()
 obs_dim = dummy_cnn.get_output_dim(env.observation_space("blue_0").shape[:-1])
@@ -61,7 +61,9 @@ learner = QMix_Trainer(
     lr=5e-4,
     epsilon_start=args.epsilon_start,
     epsilon_end=args.epsilon_end,
-    epsilon_decay=args.epsilon_decay
+    epsilon_decay=args.epsilon_decay,
+    lambda_env=args.lambda_env,
+    lambda_strategy=args.lambda_strategy
 )
 
 def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=32, 

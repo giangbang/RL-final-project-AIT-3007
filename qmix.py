@@ -11,6 +11,7 @@ import pickle
 import argparse
 import os
 
+from rewards import _calc_reward
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)
 
@@ -267,7 +268,7 @@ class QMix(nn.Module):
         return q_tot
 
 class QMix_Trainer():
-    def __init__(self, replay_buffer, n_agents, obs_dim, state_dim, action_shape, action_dim, hidden_dim, hypernet_dim, target_update_interval, lr=5e-4, epsilon_start=1.0, epsilon_end=0.05, epsilon_decay=0.995):
+    def __init__(self, replay_buffer, n_agents, obs_dim, state_dim, action_shape, action_dim, hidden_dim, hypernet_dim, target_update_interval, lr=5e-4, epsilon_start=1.0, epsilon_end=0.05, epsilon_decay=0.995, lambda_env=1, lambda_strategy=0):
         self.replay_buffer = replay_buffer
 
         self.action_dim = action_dim
@@ -277,6 +278,8 @@ class QMix_Trainer():
         self.epsilon = epsilon_start
         self.epsilon_end = epsilon_end
         self.epsilon_decay = epsilon_decay
+        self.lambda_env =  lambda_env
+        self.lambda_strategy = lambda_strategy
         
         self.agent = RNNAgent(obs_dim, action_shape,
                               action_dim, hidden_dim, self.epsilon).to(device)
@@ -354,7 +357,7 @@ class QMix_Trainer():
         target_qtot = self.target_mixer(target_max_qvals, next_state)
 
         # 4. Tính reward và targets
-        reward = self._calc_reward(reward)
+        reward = _calc_reward(reward, state, self.lambda_env, self.lambda_strategy)
         targets = self._build_td_lambda_targets(reward, target_qtot)
 
         # 5. Tính loss và update
@@ -391,19 +394,6 @@ class QMix_Trainer():
             target_param.data.copy_(param.data)
         for target_param, param in zip(self.target_agent.parameters(), self.agent.parameters()):
             target_param.data.copy_(param.data)
-
-    def _calc_reward(self, rewards):
-        # Tạo mask cho các agent còn sống (reward != 0)
-        alive_mask = (rewards != 0).float()  # [batch, sequence, agents, 1]
-        
-        # Tính tổng số agent còn sống tại mỗi timestep
-        num_alive = alive_mask.sum(dim=2, keepdim=True)  # [batch, sequence, 1, 1]
-        num_alive = torch.clamp(num_alive, min=1.0)  # Tránh chia cho 0
-        
-        # Tính mean reward chỉ cho các agent còn sống
-        rewards = (rewards * alive_mask).sum(dim=2, keepdim=True) / num_alive  # [batch, sequence, 1, 1]
-        rewards = rewards.squeeze(-1)  # [batch, sequence, 1]
-        return rewards
 
     def save_model(self, path):
         os.makedirs(os.path.dirname(path), exist_ok=True)
