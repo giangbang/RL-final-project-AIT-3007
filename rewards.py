@@ -41,14 +41,14 @@ def _calc_reward(rewards, state, action, lambda_reward=1.0):
                 number_advantage = (blue_count - red_count) * 0.1
                 
                 # 3. Surrounding reward: thưởng khi bao vây đối phương
-                if len(red_pos) > 0:
-                    angles = torch.atan2(blue_pos[:,0] - red_center[0], 
-                                       blue_pos[:,1] - red_center[1])
-                    angle_diff = torch.sort(angles)[0]
+                angles = torch.atan2(blue_pos[:,0] - red_center[0], 
+                                    blue_pos[:,1] - red_center[1])
+                angle_diff = torch.sort(angles)[0]
+                if len(angle_diff) > 1:
                     max_gap = torch.max(angle_diff[1:] - angle_diff[:-1])
                     surrounding_reward = (2*np.pi - max_gap) * 0.1
                 else:
-                    surrounding_reward = 0.0
+                    surrounding_reward = torch.tensor(0.0)
                 
                 # 4. Strategic positioning reward: thưởng khi giữ khoảng cách hợp lý
                 dist_to_enemy = torch.norm(blue_center - red_center)
