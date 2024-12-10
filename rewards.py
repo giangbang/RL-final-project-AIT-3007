@@ -69,7 +69,7 @@ def _calc_reward(rewards, state, action, lambda_reward=1.0):
     env_rewards = (env_rewards * alive_mask).sum(dim=2, keepdim=True) / num_alive
     final_rewards = lambda_reward * env_rewards + (1 - lambda_reward) * strategy_rewards
     
-    return final_rewards.squeeze(-1)  # [batch, sequence, 1]
+    return final_rewards, env_rewards, strategy_rewards  # [batch, sequence, 1]
 
 if __name__ == "__main__":
     rewards = torch.rand(1, 1000, 81, 1)

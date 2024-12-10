@@ -356,7 +356,7 @@ class QMix_Trainer():
         target_qtot = self.target_mixer(target_max_qvals, next_state)
 
         # 4. Tính reward và targets
-        reward = _calc_reward(reward, state, action, self.lambda_reward)
+        reward, env_rewards, strategy_rewards = _calc_reward(reward, state, action, self.lambda_reward)
         targets = self._build_td_lambda_targets(reward, target_qtot)
 
         # 5. Tính loss và update
@@ -373,7 +373,7 @@ class QMix_Trainer():
         self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
         self.agent.epsilon = self.epsilon
 
-        return loss.item(), reward.sum(dim=1)[0]
+        return loss.item(), reward.sum(dim=1)[0], env_rewards.sum(dim=1)[0], strategy_rewards.sum(dim=1)[0]
 
     def _build_td_lambda_targets(self, rewards, target_qs, gamma=0.99, td_lambda=0.6):
         '''

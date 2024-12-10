@@ -100,7 +100,7 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
     learner.target_agent.train()
     learner.mixer.train()
     learner.target_mixer.train()
-    loss, strategy_reward = None, None
+    loss, strategy_reward, env_reward, target_reward = None, None, None, None
     for episode in range(max_episodes):
         env.reset()
         episode_reward = 0
@@ -184,13 +184,13 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
 
         # Training step
         if len(replay_buffer) >= batch_size:
-            loss, strategy_reward = learner.update(batch_size)
+            loss, target_reward, env_reward, strategy_reward = learner.update(batch_size)
 
         # Save model periodically
         if episode % save_interval == 0:
             learner.save_model(f"{model_path}_episode_{episode}")
             
-        print(f"Episode {episode}: Reward = {episode_reward:.2f}, Strategy Reward = {strategy_reward if strategy_reward else 'N/A'}, Loss = {loss if loss else 'N/A'}")
+        print(f"Episode {episode}: Reward = {episode_reward:.2f}, {target_reward:.4f if target_reward else 'N/A'}-{env_reward:.4f if env_reward else 'N/A'}-{strategy_reward:.4f if strategy_reward else 'N/A'}, Loss = {loss:.4f if loss else 'N/A'}")
     
     # Save final model
     learner.save_model(model_path)
