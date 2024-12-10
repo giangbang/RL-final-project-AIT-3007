@@ -38,8 +38,8 @@ def _calc_reward(rewards, state, lambda_reward=1.0):
                 x_start = max(0, x-1)
                 x_end = min(45, x+2)
                 
-                blue_force = blue_coordinates[b, s, y_start:y_end, x_start:x_end].sum()
-                red_force = red_coordinates[b, s, y_start:y_end, x_start:x_end].sum()
+                blue_force = blue_coordinates[b, s, y_start:y_end, x_start:x_end].sum().cpu()
+                red_force = red_coordinates[b, s, y_start:y_end, x_start:x_end].sum().cpu()
                 
                 if red_force > 0: # Khi có địch
                     if blue_force > red_force:
