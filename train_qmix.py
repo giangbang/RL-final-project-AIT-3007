@@ -190,7 +190,7 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
         if episode % save_interval == 0:
             learner.save_model(f"{model_path}_episode_{episode}")
             
-        print(f"Episode {episode}: Reward = {episode_reward:.2f}, {target_reward:.4f if target_reward else 'N/A'}-{env_reward:.4f if env_reward else 'N/A'}-{strategy_reward:.4f if strategy_reward else 'N/A'}, Loss = {loss:.4f if loss else 'N/A'}")
+        print(f"Episode {episode}: Reward = {episode_reward:.2f}, {target_reward if target_reward else 'N/A'}-{env_reward if env_reward else 'N/A'}-{strategy_reward if strategy_reward else 'N/A'}, Loss = {loss if loss else 'N/A'}")
     
     # Save final model
     learner.save_model(model_path)
