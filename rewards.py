@@ -55,12 +55,12 @@ def _calc_reward(rewards, state, action, lambda_reward=1.0):
                 position_reward = -torch.abs(dist_to_enemy - 10.0) * 0.05  # optimal distance = 10
                 
                 strategy_rewards[b,t] = (cohesion_reward + number_advantage + 
-                                       surrounding_reward + position_reward) / 810.0  # normalize by number of agents
+                                       surrounding_reward + position_reward)
     
     # Normalize strategy rewards
     if strategy_rewards.std() > 0:
         strategy_rewards = (strategy_rewards - strategy_rewards.mean()) / strategy_rewards.std()
-    
+    strategy_rewards = strategy_rewards / 8.0  # normalize by number of agents
 
     # Tính mean reward cho các agent còn sống
     alive_mask = (env_rewards != 0).float()
