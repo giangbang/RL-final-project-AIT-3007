@@ -11,25 +11,8 @@ def _calc_reward(rewards, state, lambda_env=1.0, lambda_strategy=1.0):
     red_coordinates = state[:, :, :, :, 1]  # [batch, seq, H, W]
     blue_coordinates = state[:, :, :, :, 3]  # [batch, seq, H, W]
     
-    # Tính force cho mỗi cell
-    def get_cell_forces(coordinates):
-        forces = []
-        for b in range(coordinates.shape[0]):  # batch
-            for s in range(coordinates.shape[1]):  # sequence
-                # Đếm số lượng agent trong mỗi cell
-                cell_forces = {}
-                positions = coordinates[b,s].nonzero()
-                for pos in positions:
-                    cell = (pos[0].item(), pos[1].item())
-                    if cell not in cell_forces:
-                        cell_forces[cell] = 1
-                    else:
-                        cell_forces[cell] += 1
-                forces.append(cell_forces)
-        return forces
-
-    red_forces = get_cell_forces(red_coordinates)
-    blue_forces = get_cell_forces(blue_coordinates)
+    red_forces = get_cell_forces_vectorized(red_coordinates)
+    blue_forces = get_cell_forces_vectorized(blue_coordinates)
 
     # Tính rewards cho từng agent
     batch_size = rewards.shape[0]
@@ -77,6 +60,57 @@ def _calc_reward(rewards, state, lambda_env=1.0, lambda_strategy=1.0):
     final_rewards = lambda_env * env_rewards + lambda_strategy * strategy_rewards
     
     return final_rewards.squeeze(-1)  # [batch, sequence, 1]
+
+def get_cell_forces(coordinates):
+    """
+    Tính force cho mỗi cell (tính tuần tự, đơn giản nhưng tốn thời gian)
+    """
+    forces = []
+    for b in range(coordinates.shape[0]):  # batch
+        for s in range(coordinates.shape[1]):  # sequence
+            # Đếm số lượng agent trong mỗi cell
+            cell_forces = {}
+            positions = coordinates[b,s].nonzero()
+            for pos in positions:
+                cell = (pos[0].item(), pos[1].item())
+                if cell not in cell_forces:
+                    cell_forces[cell] = 1
+                else:
+                    cell_forces[cell] += 1
+            forces.append(cell_forces)
+    return forces
+
+def get_cell_forces_vectorized(coordinates):
+    """
+    Computes cell forces in a vectorized manner using PyTorch, designed to work on GPU.
+    
+    Parameters:
+        coordinates (torch.Tensor): A binary tensor of shape (batch, sequence, height, width).
+                                    Non-zero values indicate the presence of agents.
+    
+    Returns:
+        list: A list of dictionaries, where each dictionary contains the cell forces
+              for a specific batch and sequence.
+    """   
+    # Find non-zero indices
+    batch_indices, sequence_indices, height_indices, width_indices = coordinates.nonzero(as_tuple=True)
+    
+    # Combine height and width into tuples representing cells
+    cells = torch.stack([height_indices, width_indices], dim=1)
+
+    # Group by batch and sequence
+    forces = []
+    for b in range(coordinates.shape[0]):  # iterate over batch
+        for s in range(coordinates.shape[1]):  # iterate over sequence
+            # Filter cells belonging to the current batch and sequence
+            mask = (batch_indices == b) & (sequence_indices == s)
+            filtered_cells = cells[mask].tolist()
+            
+            # Convert cells to a dictionary with count 1 for each unique cell
+            cell_forces = {tuple(cell): 1 for cell in filtered_cells}
+            forces.append(cell_forces)
+
+    return forces
 
 if __name__ == "__main__":
     rewards = torch.rand(1, 1000, 81, 1)
