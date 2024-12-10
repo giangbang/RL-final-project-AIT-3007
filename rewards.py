@@ -10,14 +10,10 @@ def _calc_reward(rewards, state, lambda_reward=1.0):
     # Lấy coordinates của red và blue agents từ state
     red_coordinates = state[:, :, :, :, 1]  # [batch, seq, H, W]
     blue_coordinates = state[:, :, :, :, 3]  # [batch, seq, H, W]
-    
-    red_forces = get_cell_forces_vectorized(red_coordinates)
-    blue_forces = get_cell_forces_vectorized(blue_coordinates)
 
     # Tính rewards cho từng agent
     batch_size = rewards.shape[0]
     seq_len = rewards.shape[1]
-    n_agents = rewards.shape[2]
     
     env_rewards = rewards.clone()
     strategy_rewards = torch.zeros_like(rewards)
@@ -31,31 +27,43 @@ def _calc_reward(rewards, state, lambda_reward=1.0):
             for idx, pos in enumerate(blue_positions):
                 y, x = pos[0].item(), pos[1].item()
                 
-                # Tính consolidation of force reward
-                # Tính số lượng đồng minh trong vùng 3x3
+                # Kiểm tra vùng 3x3 cho consolidation
                 y_start = max(0, y-1)
                 y_end = min(45, y+2)
                 x_start = max(0, x-1)
                 x_end = min(45, x+2)
                 
-                blue_force = blue_coordinates[b, s, y_start:y_end, x_start:x_end].sum().cpu()
-                red_force = red_coordinates[b, s, y_start:y_end, x_start:x_end].sum().cpu()
+                # Kiểm tra vùng 5x5 cho overcrowding
+                y_start_5x5 = max(0, y-2)
+                y_end_5x5 = min(45, y+3)
+                x_start_5x5 = max(0, x-2)
+                x_end_5x5 = min(45, x+3)
                 
-                if red_force > 0: # Khi có địch
-                    if blue_force > red_force:
+                blue_force_3x3 = blue_coordinates[b, s, y_start:y_end, x_start:x_end].sum().cpu()
+                red_force_3x3 = red_coordinates[b, s, y_start:y_end, x_start:x_end].sum().cpu()
+                
+                blue_force_5x5 = blue_coordinates[b, s, y_start_5x5:y_end_5x5, x_start_5x5:x_end_5x5].sum().cpu()
+
+                if red_force_3x3 > 0: # Khi có địch
+                    if blue_force_3x3 > red_force_3x3:
                         # Reward khi blue force lớn hơn
-                        consolidation_reward = 2.0 / np.pi * np.arctan(blue_force / red_force)
+                        consolidation_reward = 2.0 / np.pi * np.arctan(blue_force_3x3 / red_force_3x3)
                         strategy_rewards[b, s, idx] += consolidation_reward
                     else:
                         # Penalty khi blue force nhỏ hơn, tỷ lệ với mức độ yếu thế
-                        consolidation_penalty = -0.2 * (red_force / blue_force) if blue_force > 0 else -0.3
+                        consolidation_penalty = -0.2 * (red_force_3x3 / blue_force_3x3)
                         strategy_rewards[b, s, idx] += consolidation_penalty
-                elif blue_force > 4: # Không có địch, tập trung lực lượng
+                elif blue_force_3x3 > 4: # Không có địch, tập trung lực lượng
                     # Thưởng thêm khi tập trung 5+ blue agents, nhưng có giới hạn
-                    strategy_rewards[b, s, idx] += min(0.5, 0.1 * blue_force)
+                    strategy_rewards[b, s, idx] += min(0.5, 0.1 * blue_force_3x3)
                 else:
                     # Penalty giảm dần khi càng gần đủ 5 agents
-                    strategy_rewards[b, s, idx] -= 0.1 * (5 - blue_force) / 5
+                    strategy_rewards[b, s, idx] -= 0.1 * (5 - blue_force_3x3) / 5
+                    
+                # Phạt khi có quá nhiều agent trong vùng 5x5
+                if blue_force_5x5 > 9:
+                    overcrowding_penalty = -0.2 * (blue_force_5x5 - 9)
+                    strategy_rewards[b, s, idx] += overcrowding_penalty
 
     # Normalize rewards
     strategy_rewards = (strategy_rewards - strategy_rewards.mean()) / (strategy_rewards.std() + 1e-8)
@@ -69,38 +77,6 @@ def _calc_reward(rewards, state, lambda_reward=1.0):
     final_rewards = lambda_reward * env_rewards + (1 - lambda_reward) * strategy_rewards
     
     return final_rewards.squeeze(-1)  # [batch, sequence, 1]
-
-def get_cell_forces_vectorized(coordinates):
-    """
-    Computes cell forces in a vectorized manner using PyTorch, designed to work on GPU.
-    
-    Parameters:
-        coordinates (torch.Tensor): A binary tensor of shape (batch, sequence, height, width).
-                                    Non-zero values indicate the presence of agents.
-    
-    Returns:
-        list: A list of dictionaries, where each dictionary contains the cell forces
-              for a specific batch and sequence.
-    """   
-    # Find non-zero indices
-    batch_indices, sequence_indices, height_indices, width_indices = coordinates.nonzero(as_tuple=True)
-    
-    # Combine height and width into tuples representing cells
-    positions = torch.stack([height_indices, width_indices], dim=1)
-
-    # Group by batch and sequence
-    forces = []
-    for b in range(coordinates.shape[0]):  # iterate over batch
-        for s in range(coordinates.shape[1]):  # iterate over sequence
-            # Filter cells belonging to the current batch and sequence
-            mask = (batch_indices == b) & (sequence_indices == s)
-            filtered_pos = positions[mask].tolist()
-            
-            # Convert cells to a dictionary with count 1 for each unique cell
-            cell_forces = {tuple(cell): 1 for cell in filtered_pos}
-            forces.append(cell_forces)
-
-    return forces
 
 if __name__ == "__main__":
     rewards = torch.rand(1, 1000, 81, 1)
