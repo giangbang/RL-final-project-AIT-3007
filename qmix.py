@@ -268,7 +268,7 @@ class QMix(nn.Module):
         return q_tot
 
 class QMix_Trainer():
-    def __init__(self, replay_buffer, n_agents, obs_dim, state_dim, action_shape, action_dim, hidden_dim, hypernet_dim, target_update_interval, lr=5e-4, epsilon_start=1.0, epsilon_end=0.05, epsilon_decay=0.995, lambda_env=1, lambda_strategy=0):
+    def __init__(self, replay_buffer, n_agents, obs_dim, state_dim, action_shape, action_dim, hidden_dim, hypernet_dim, target_update_interval, lr=5e-4, epsilon_start=1.0, epsilon_end=0.05, epsilon_decay=0.995, lambda_reward=1):
         self.replay_buffer = replay_buffer
 
         self.action_dim = action_dim
@@ -278,8 +278,7 @@ class QMix_Trainer():
         self.epsilon = epsilon_start
         self.epsilon_end = epsilon_end
         self.epsilon_decay = epsilon_decay
-        self.lambda_env =  lambda_env
-        self.lambda_strategy = lambda_strategy
+        self.lambda_reward =  lambda_reward
         
         self.agent = RNNAgent(obs_dim, action_shape,
                               action_dim, hidden_dim, self.epsilon).to(device)
@@ -357,7 +356,7 @@ class QMix_Trainer():
         target_qtot = self.target_mixer(target_max_qvals, next_state)
 
         # 4. Tính reward và targets
-        reward = _calc_reward(reward, state, self.lambda_env, self.lambda_strategy)
+        reward = _calc_reward(reward, state, self.lambda_reward)
         targets = self._build_td_lambda_targets(reward, target_qtot)
 
         # 5. Tính loss và update

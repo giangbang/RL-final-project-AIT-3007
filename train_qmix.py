@@ -17,8 +17,7 @@ parser.add_argument('--epsilon_start', type=float, default=1.0, help='Starting e
 parser.add_argument('--epsilon_end', type=float, default=0.05, help='Minimum epsilon value')
 parser.add_argument('--epsilon_decay', type=float, default=0.985, help='Epsilon decay rate')
 parser.add_argument('--seed', type=int, default=42, help='random seed')
-parser.add_argument('--lambda_env', type=int, default=0, help='Weight reward from enviroment')
-parser.add_argument('--lambda_strategy', type=int, default=1, help='Weight reward from Lanchester strategy')
+parser.add_argument('--lambda_reward', type=int, default=0, help='Weight reward from enviroment')
 
 args = parser.parse_args()
 
@@ -62,8 +61,7 @@ learner = QMix_Trainer(
     epsilon_start=args.epsilon_start,
     epsilon_end=args.epsilon_end,
     epsilon_decay=args.epsilon_decay,
-    lambda_env=args.lambda_env,
-    lambda_strategy=args.lambda_strategy
+    lambda_reward=args.lambda_reward,
 )
 
 def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=32, 

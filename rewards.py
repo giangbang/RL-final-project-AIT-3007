@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 
-def _calc_reward(rewards, state, lambda_env=1.0, lambda_strategy=1.0):
+def _calc_reward(rewards, state, lambda_reward=1.0):
     """
     Tính toán rewards dựa trên Lanchester strategy
     state shape: [batch, seq, H, W, channels]
@@ -66,7 +66,7 @@ def _calc_reward(rewards, state, lambda_env=1.0, lambda_strategy=1.0):
     num_alive = torch.clamp(num_alive, min=1.0)
     env_rewards = (env_rewards * alive_mask).sum(dim=2, keepdim=True) / num_alive
     strategy_rewards = (strategy_rewards * alive_mask).sum(dim=2, keepdim=True) / num_alive
-    final_rewards = lambda_env * env_rewards + lambda_strategy * strategy_rewards
+    final_rewards = lambda_reward * env_rewards + (1 - lambda_reward) * strategy_rewards
     
     return final_rewards.squeeze(-1)  # [batch, sequence, 1]
 
