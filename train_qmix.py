@@ -18,7 +18,7 @@ parser.add_argument('--epsilon_end', type=float, default=0.05, help='Minimum eps
 parser.add_argument('--epsilon_decay', type=float, default=0.985, help='Epsilon decay rate')
 parser.add_argument('--seed', type=int, default=42, help='random seed')
 parser.add_argument('--lambda_reward', type=float, default=0, help='Weight reward from enviroment')
-
+parser.add_argument('--model_path', type=str, default=None, help='Path to save model')
 args = parser.parse_args()
 
 dummy_cnn = CNNFeatureExtractor()
@@ -63,6 +63,9 @@ learner = QMix_Trainer(
     epsilon_decay=args.epsilon_decay,
     lambda_reward=args.lambda_reward,
 )
+
+if args.model_path:
+    learner.load_model(args.model_path, map_location=device)
 
 def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=32, 
                     save_interval=100, model_path='model/qmix'):
