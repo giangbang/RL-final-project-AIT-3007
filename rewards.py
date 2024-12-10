@@ -16,7 +16,7 @@ def _calc_reward(rewards, state, action, lambda_reward=1.0):
     batch_size = rewards.shape[0]
     seq_len = rewards.shape[1]
     
-    env_rewards = rewards.clone()
+    env_rewards = rewards.clone().squeeze(-1)
     strategy_rewards = torch.zeros((batch_size, seq_len, 1))
     
     for b in range(batch_size):
