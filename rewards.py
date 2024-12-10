@@ -29,24 +29,33 @@ def _calc_reward(rewards, state, lambda_env=1.0, lambda_strategy=1.0):
             
             # Với mỗi agent (có thể ít hơn n_agents nếu một số đã chết)
             for idx, pos in enumerate(blue_positions):
-                if idx < n_agents:  # Chỉ xét n_agents đầu tiên
-                    cell = (pos[0].item(), pos[1].item())
-                    
-                    # Tính consolidation of force reward
-                    red_force = red_forces[b*seq_len + s].get(cell, 0)
-                    blue_force = blue_forces[b*seq_len + s].get(cell, 0)
-                    
-                    if blue_force > 0 and red_force > 0:
-                        if blue_force > red_force:
-                            # Reward khi blue force lớn hơn
-                            consolidation_reward = 2.0 / np.pi * np.arctan(blue_force / red_force)
-                            strategy_rewards[b, s, idx] += consolidation_reward
-                        else:
-                            # Penalty khi blue force nhỏ hơn
-                            strategy_rewards[b, s, idx] -= 0.1
-                    elif blue_force > 0 and red_force == 0:
-                        # Thưởng thêm nếu cell chỉ có blue agents
-                        strategy_rewards[b, s, idx] += 0.5
+                y, x = pos[0].item(), pos[1].item()
+                
+                # Tính consolidation of force reward
+                # Tính số lượng đồng minh trong vùng 3x3
+                y_start = max(0, y-1)
+                y_end = min(45, y+2)
+                x_start = max(0, x-1)
+                x_end = min(45, x+2)
+                
+                blue_force = blue_coordinates[b, s, y_start:y_end, x_start:x_end].sum()
+                red_force = red_coordinates[b, s, y_start:y_end, x_start:x_end].sum()
+                
+                if red_force > 0: # Khi có địch
+                    if blue_force > red_force:
+                        # Reward khi blue force lớn hơn
+                        consolidation_reward = 2.0 / np.pi * np.arctan(blue_force / red_force)
+                        strategy_rewards[b, s, idx] += consolidation_reward
+                    else:
+                        # Penalty khi blue force nhỏ hơn, tỷ lệ với mức độ yếu thế
+                        consolidation_penalty = -0.2 * (red_force / blue_force) if blue_force > 0 else -0.3
+                        strategy_rewards[b, s, idx] += consolidation_penalty
+                elif blue_force > 4: # Không có địch, tập trung lực lượng
+                    # Thưởng thêm khi tập trung 5+ blue agents, nhưng có giới hạn
+                    strategy_rewards[b, s, idx] += min(0.5, 0.1 * blue_force)
+                else:
+                    # Penalty giảm dần khi càng gần đủ 5 agents
+                    strategy_rewards[b, s, idx] -= 0.1 * (5 - blue_force) / 5
 
     # Normalize rewards
     strategy_rewards = (strategy_rewards - strategy_rewards.mean()) / (strategy_rewards.std() + 1e-8)
@@ -60,25 +69,6 @@ def _calc_reward(rewards, state, lambda_env=1.0, lambda_strategy=1.0):
     final_rewards = lambda_env * env_rewards + lambda_strategy * strategy_rewards
     
     return final_rewards.squeeze(-1)  # [batch, sequence, 1]
-
-def get_cell_forces(coordinates):
-    """
-    Tính force cho mỗi cell (tính tuần tự, đơn giản nhưng tốn thời gian)
-    """
-    forces = []
-    for b in range(coordinates.shape[0]):  # batch
-        for s in range(coordinates.shape[1]):  # sequence
-            # Đếm số lượng agent trong mỗi cell
-            cell_forces = {}
-            positions = coordinates[b,s].nonzero()
-            for pos in positions:
-                cell = (pos[0].item(), pos[1].item())
-                if cell not in cell_forces:
-                    cell_forces[cell] = 1
-                else:
-                    cell_forces[cell] += 1
-            forces.append(cell_forces)
-    return forces
 
 def get_cell_forces_vectorized(coordinates):
     """
@@ -96,7 +86,7 @@ def get_cell_forces_vectorized(coordinates):
     batch_indices, sequence_indices, height_indices, width_indices = coordinates.nonzero(as_tuple=True)
     
     # Combine height and width into tuples representing cells
-    cells = torch.stack([height_indices, width_indices], dim=1)
+    positions = torch.stack([height_indices, width_indices], dim=1)
 
     # Group by batch and sequence
     forces = []
@@ -104,10 +94,10 @@ def get_cell_forces_vectorized(coordinates):
         for s in range(coordinates.shape[1]):  # iterate over sequence
             # Filter cells belonging to the current batch and sequence
             mask = (batch_indices == b) & (sequence_indices == s)
-            filtered_cells = cells[mask].tolist()
+            filtered_pos = positions[mask].tolist()
             
             # Convert cells to a dictionary with count 1 for each unique cell
-            cell_forces = {tuple(cell): 1 for cell in filtered_cells}
+            cell_forces = {tuple(cell): 1 for cell in filtered_pos}
             forces.append(cell_forces)
 
     return forces
