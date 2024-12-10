@@ -17,7 +17,7 @@ def _calc_reward(rewards, state, action, lambda_reward=1.0):
     seq_len = rewards.shape[1]
     
     env_rewards = rewards.clone().squeeze(-1)
-    strategy_rewards = torch.zeros((batch_size, seq_len, 1))
+    strategy_rewards = torch.zeros((batch_size, seq_len, 1)).to(rewards.device)
     
     for b in range(batch_size):
         for t in range(seq_len):
@@ -67,9 +67,6 @@ def _calc_reward(rewards, state, action, lambda_reward=1.0):
     num_alive = alive_mask.sum(dim=2, keepdim=True)
     num_alive = torch.clamp(num_alive, min=1.0)
     env_rewards = (env_rewards * alive_mask).sum(dim=2, keepdim=True) / num_alive
-    print("Strategy rewards device:", strategy_rewards.device)
-    print("Env rewards device:", env_rewards.device)
-    exit()
     final_rewards = lambda_reward * env_rewards + (1 - lambda_reward) * strategy_rewards
     
     return final_rewards.squeeze(-1)  # [batch, sequence, 1]
