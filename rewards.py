@@ -47,7 +47,7 @@ def _calc_reward(rewards, state, lambda_reward=1.0):
                 if red_force_3x3 > 0: # Khi có địch
                     if blue_force_3x3 > red_force_3x3:
                         # Reward khi blue force lớn hơn
-                        consolidation_reward = 2.0 / np.pi * np.arctan(blue_force_3x3 / red_force_3x3)
+                        consolidation_reward = 2.5 / np.pi * np.arctan(blue_force_3x3 / red_force_3x3)
                         strategy_rewards[b, s, idx] += consolidation_reward
                     else:
                         # Penalty khi blue force nhỏ hơn, tỷ lệ với mức độ yếu thế
@@ -55,10 +55,10 @@ def _calc_reward(rewards, state, lambda_reward=1.0):
                         strategy_rewards[b, s, idx] += consolidation_penalty
                 elif blue_force_3x3 > 4: # Không có địch, tập trung lực lượng
                     # Thưởng thêm khi tập trung 5+ blue agents, nhưng có giới hạn
-                    strategy_rewards[b, s, idx] += min(0.5, 0.1 * blue_force_3x3)
+                    strategy_rewards[b, s, idx] += min(1.0, 0.2 * blue_force_3x3)
                 else:
                     # Penalty giảm dần khi càng gần đủ 5 agents
-                    strategy_rewards[b, s, idx] -= 0.1 * (5 - blue_force_3x3) / 5
+                    strategy_rewards[b, s, idx] -= 0.05 * (5 - blue_force_3x3) / 5
                     
                 # Phạt khi có quá nhiều agent trong vùng 5x5
                 if blue_force_5x5 > 9:
