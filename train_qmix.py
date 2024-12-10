@@ -71,14 +71,16 @@ learner = QMix_Trainer(
 if args.checkpoint:
     learner.load_model(args.checkpoint, map_location=device)
     
-# Red.pt
-red_agent = QNetwork(
-    env.observation_space("red_0").shape, env.action_space("red_0").n
-)
-red_agent.load_state_dict(
-    torch.load("red.pt", weights_only=True, map_location="cpu")
-)
-red_agent.to(device)
+red_agent = None
+if args.red_pretrained:
+    # Red.pt
+    red_agent = QNetwork(
+        env.observation_space("red_0").shape, env.action_space("red_0").n
+    )
+    red_agent.load_state_dict(
+        torch.load("red.pt", weights_only=True, map_location="cpu")
+    )
+    red_agent.to(device)
 
 def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=32, 
                     save_interval=100, model_path='model/qmix'):
