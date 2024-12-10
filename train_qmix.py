@@ -17,7 +17,7 @@ parser.add_argument('--epsilon_start', type=float, default=1.0, help='Starting e
 parser.add_argument('--epsilon_end', type=float, default=0.05, help='Minimum epsilon value')
 parser.add_argument('--epsilon_decay', type=float, default=0.985, help='Epsilon decay rate')
 parser.add_argument('--seed', type=int, default=42, help='random seed')
-parser.add_argument('--lambda_reward', type=int, default=0, help='Weight reward from enviroment')
+parser.add_argument('--lambda_reward', type=float, default=0, help='Weight reward from enviroment')
 
 args = parser.parse_args()
 
