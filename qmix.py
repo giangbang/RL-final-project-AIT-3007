@@ -373,7 +373,7 @@ class QMix_Trainer():
         self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
         self.agent.epsilon = self.epsilon
 
-        return loss.item(), reward.sum(dim=1)[0].cpu(), env_rewards.sum(dim=1)[0].cpu(), strategy_rewards.sum(dim=1)[0].cpu()
+        return loss.item(), reward.sum(dim=1)[0].cpu().item(), env_rewards.sum(dim=1)[0].cpu().item(), strategy_rewards.sum(dim=1)[0].cpu().item()
 
     def _build_td_lambda_targets(self, rewards, target_qs, gamma=0.99, td_lambda=0.6):
         '''
