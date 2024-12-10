@@ -35,10 +35,10 @@ def _calc_reward(rewards, state, action, lambda_reward=1.0):
                 
                 # 1. Cohesion reward: thưởng khi đội hình tập trung
                 blue_spread = torch.pdist(blue_pos.float()).mean() if len(blue_pos) > 1 else torch.tensor(0.0)
-                cohesion_reward = -blue_spread * 0.01
+                cohesion_reward = -blue_spread * 0.001
                 
                 # 2. Numerical advantage reward: thưởng khi có lợi thế về số lượng
-                number_advantage = (blue_count - red_count) * 0.1
+                number_advantage = (blue_count - red_count) * 0.01
                 
                 # 3. Surrounding reward: thưởng khi bao vây đối phương
                 angles = torch.atan2(blue_pos[:,0] - red_center[0], 
@@ -46,13 +46,13 @@ def _calc_reward(rewards, state, action, lambda_reward=1.0):
                 angle_diff = torch.sort(angles)[0]
                 if len(angle_diff) > 1:
                     max_gap = torch.max(angle_diff[1:] - angle_diff[:-1])
-                    surrounding_reward = (2*np.pi - max_gap) * 0.1
+                    surrounding_reward = (2*np.pi - max_gap) * 0.01
                 else:
                     surrounding_reward = torch.tensor(0.0)
                 
                 # 4. Strategic positioning reward: thưởng khi giữ khoảng cách hợp lý
                 dist_to_enemy = torch.norm(blue_center - red_center)
-                position_reward = -torch.abs(dist_to_enemy - 10.0) * 0.05  # optimal distance = 10
+                position_reward = -torch.abs(dist_to_enemy - 10.0) * 0.005  # optimal distance = 10
                 
                 strategy_rewards[b,t] = (cohesion_reward + number_advantage + 
                                        surrounding_reward + position_reward) / 81.0  # normalize by number of agents
