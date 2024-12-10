@@ -6,6 +6,7 @@ import cv2
 import argparse
 from magent2.environments import battle_v4
 from qmix import QMix_Trainer, ReplayBufferGRU, CNNFeatureExtractor
+from torch_model import QNetwork
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -74,6 +75,19 @@ def get_random_policy():
     """
     def policy(env, agent_id, obs):
         return env.action_space(agent_id).sample()
+    return policy
+
+def get_pretrain_red_policy(q_network):
+    """
+    Policy cho team red sử dụng pretrained model
+    """
+    def policy(env, agent_id, obs):
+        observation = (
+            torch.Tensor(obs).float().permute([2, 0, 1]).unsqueeze(0).to(device)
+        )
+        with torch.no_grad():
+            q_values = q_network(observation)
+        return torch.argmax(q_values, dim=1).cpu().numpy()[0]
     return policy
 
 def evaluate(env, blue_policy, red_policy, n_episodes=100, max_cycles=1000, save_video=False):
@@ -186,16 +200,32 @@ if __name__ == "__main__":
     # Khởi tạo environment
     env = battle_v4.env(map_size=45, minimap_mode=False, extra_features=False, render_mode=render_mode)
     
+    q_network = QNetwork(
+        env.observation_space("red_0").shape, env.action_space("red_0").n
+    )
+    q_network.load_state_dict(
+        torch.load("red.pt", weights_only=True, map_location="cpu")
+    )
+    q_network.to(device)
+    
     # Khởi tạo policies
     blue_policy = get_blue_policy(args.model_path)
     red_policy = get_random_policy()
-    
     # Evaluate
     results = evaluate(env, blue_policy, red_policy, args.n_episodes, args.max_cycles, args.save_video)    
-    print("\nFinal Results:")
+    print("\nFinal Results Random:")
     print(f"Blue Winrate: {results['winrate_blue']:.3f}")
     print(f"Red Winrate: {results['winrate_red']:.3f}")
     print(f"Blue Average Reward: {results['average_rewards_blue']:.3f}")
     print(f"Red Average Reward: {results['average_rewards_red']:.3f}")
     
+    red_policy = get_pretrain_red_policy(q_network)
+    # Evaluate
+    results = evaluate(env, blue_policy, red_policy, args.n_episodes, args.max_cycles, args.save_video)    
+    print("\nFinal Results Pretrain:")
+    print(f"Blue Winrate: {results['winrate_blue']:.3f}")
+    print(f"Red Winrate: {results['winrate_red']:.3f}")
+    print(f"Blue Average Reward: {results['average_rewards_blue']:.3f}")
+    print(f"Red Average Reward: {results['average_rewards_red']:.3f}")
+
     env.close()
