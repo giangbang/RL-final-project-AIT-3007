@@ -5,6 +5,7 @@ import random
 from magent2.environments import battle_v4
 from qmix import QMix_Trainer, ReplayBufferGRU, CNNFeatureExtractor
 from utils import get_all_states, make_action
+from torch_model import QNetwork
 
 # Thêm đoạn parse arguments trước khi định nghĩa các biến
 parser = argparse.ArgumentParser(description='Train QMIX agents')
@@ -20,6 +21,7 @@ parser.add_argument('--seed', type=int, default=42, help='random seed')
 parser.add_argument('--lambda_reward', type=float, default=0, help='Weight reward from enviroment')
 parser.add_argument('--checkpoint', type=str, default=None, help='Path to checkpoint')
 parser.add_argument('--model_path', type=str, default='model/qmix', help='Path to save model')
+parser.add_argument('--red_pretrained', action='store_true', help='Use red.pt pretrained model')
 
 args = parser.parse_args()
 
@@ -68,6 +70,15 @@ learner = QMix_Trainer(
 
 if args.checkpoint:
     learner.load_model(args.checkpoint, map_location=device)
+    
+# Red.pt
+red_agent = QNetwork(
+    env.observation_space("red_0").shape, env.action_space("red_0").n
+)
+red_agent.load_state_dict(
+    torch.load("red.pt", weights_only=True, map_location="cpu")
+)
+red_agent.to(device)
 
 def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=32, 
                     save_interval=100, model_path='model/qmix'):
@@ -127,7 +138,7 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
 
             # Execute actions and collect next states/rewards
             # Save dead agents after making actions
-            dead_agents = make_action(actions, env, dead_agents)
+            dead_agents = make_action(actions, env, dead_agents, red_agent)
             next_observations, next_state, rewards, terminations, truncations, infos = get_all_states(env, dead_agents)
             if len(next_observations) == 0:  # No blue agents alive
                 break
