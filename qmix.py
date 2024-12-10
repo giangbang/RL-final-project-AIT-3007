@@ -356,7 +356,7 @@ class QMix_Trainer():
         target_qtot = self.target_mixer(target_max_qvals, next_state)
 
         # 4. Tính reward và targets
-        reward = _calc_reward(reward, state, self.lambda_reward)
+        reward = _calc_reward(reward, state, action, self.lambda_reward)
         targets = self._build_td_lambda_targets(reward, target_qtot)
 
         # 5. Tính loss và update
