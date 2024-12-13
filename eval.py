@@ -14,7 +14,6 @@ def eval():
     env = battle_v4.env(map_size=45, max_cycles=max_cycles)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # Random policy
     def random_policy(env, agent, obs):
         return env.action_space(agent).sample()
 
@@ -56,7 +55,7 @@ def eval():
             action = red_q_network(observation).argmax().item()
         return action
 
-    def run_eval(env, blue_policy, red_policy, n_episode=10):
+    def run_eval(env, blue_policy, red_policy, n_episode=30):
         results = {"blue_win": 0, "red_win": 0, "draw": 0}
         for _ in tqdm(range(n_episode)):
             env.reset()
