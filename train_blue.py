@@ -64,7 +64,7 @@ def train():
     epsilon_end = 0.1
     epsilon_decay = 0.995
     epsilon = epsilon_start
-    num_episodes = 500
+    num_episodes = 800
     step_count = 0
 
     def select_action(state, epsilon):
