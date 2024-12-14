@@ -5,6 +5,7 @@ import numpy as np
 from magent2.environments import battle_v4
 from agilerl.components.multi_agent_replay_buffer import MultiAgentReplayBuffer
 from agilerl.vector.pz_async_vec_env import AsyncPettingZooVecEnv
+import wandb
 
 from typing import List
 
@@ -118,6 +119,9 @@ class QMIX:
 
         self.optimizer = optim.Adam(list(self.agent_q_network.parameters()) + list(self.mixing_network.parameters()), lr=lr)
 
+        # Watch models with wandb
+        wandb.watch(self.agent_q_network, log_freq=100)
+        wandb.watch(self.mixing_network, log_freq=100)
     def select_actions(self, obs, epsilon=0.1):
         # obs shape: (N_agents, 13,13,5)
         obs = obs.unsqueeze(0) # add batch dimension
@@ -175,6 +179,7 @@ class QMIX:
         loss.backward()
         self.optimizer.step()
 
+        return loss
     # TODO:
     # Soft update or periodic hard update of target networks
     # Here we do periodic hard update:
@@ -267,6 +272,29 @@ def process_batch(batch, field_names, batch_size):
 
 if __name__ == "__main__":
     import supersuit as ss
+    wandb.login(key="37d305fc5fac9b15b88ec48208250be56185986e")
+        # Initialize wandb
+    wandb.init(project="QMIX_Project 1", config={ 
+        "learning_rate": 1e-3,
+        "batch_size": 32,
+        "gamma": 0.99,
+        "epsilon_start": 1.0,
+        "epsilon_decay": 0.9998,
+        "epsilon_min": 0.05,
+        "num_episodes": 50,
+        "update_step" : 10
+    })
+    config = wandb.config
+
+    # Update variables with config values
+    num_episodes = config.num_episodes
+    batch_size = config.batch_size
+    epsilon = config.epsilon_start
+    epsilon_decay = config.epsilon_decay
+    epsilon_min = config.epsilon_min
+    learning_rate = config.learning_rate
+    gamma = config.gamma
+    update_step = config.update_step
 
     num_envs = 2 
     # env = battle_v4.parallel_env(map_size=30, minimap_mode=False, max_cycles=300, seed=10)
@@ -288,9 +316,23 @@ if __name__ == "__main__":
     num_red_agents = len(red_agents)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    qmix_blue = QMIX(num_agents=num_blue_agents, state_shape=(45,45,5), agent_ids=blue_agents, num_actions=21)
-    qmix_red = QMIX(num_agents=num_red_agents, state_shape=(45,45,5), agent_ids=red_agents, num_actions=21)
-
+    # Initialize your QMIX agents with the learning rate from config
+    qmix_blue = QMIX(
+        num_agents=num_blue_agents,
+        state_shape=(45, 45, 5),
+        agent_ids=blue_agents,
+        num_actions=21,
+        lr=learning_rate,
+        gamma=gamma
+    )
+    qmix_red = QMIX(
+        num_agents=num_red_agents,
+        state_shape=(45, 45, 5),
+        agent_ids=red_agents,
+        num_actions=21,
+        lr=learning_rate,
+        gamma=gamma
+    )
     # Off-policy training: we need a replay buffer
     # rb = MultiAgentReplayBuffer(
     #     memory_size=100000,
@@ -299,7 +341,7 @@ if __name__ == "__main__":
     #     device="cpu"
     # )
     field_names = ["obs", "actions", "rewards", "next_obs", "dones", "state", "next_state"]
-    rb = ReplayBuffer(memory_size=100000,
+    rb = ReplayBuffer(memory_size=1000,
          field_names=field_names)
 
     num_episodes = 1
@@ -308,15 +350,19 @@ if __name__ == "__main__":
     epsilon_decay = 0.999
 
     count = 0
-    for ep in range(2):
+    for ep in range(num_episodes):
         obs, _ = env.reset()
         # We will collect transitions after all blue agents have acted once (a "joint step")
         # the purpose of joint step is to collect joint transitions for QMIX training
         global_state = env.state() # global state for mixing
 
+        episode_reward_blue = 0
+        episode_reward_red = 0
+
         terminated = False
         while not terminated:
-            count +=1
+            
+            count += 1
             # Convert obs to batch form
             blue_agents = [agent for agent in env.agents if agent.startswith("blue")]
             obs_array_blue = np.stack([obs[a] for a in blue_agents], axis=0)
@@ -345,13 +391,17 @@ if __name__ == "__main__":
 
             # Compute rewards: sum or average relevant ones for blue agents
             # The environment: each agent gets individual reward. We can sum them for QMIX training
-            done_all = np.all(list(dones.values()))
+            # done_all = np.all(list(dones.values()))
             blue_done = np.all([dones[a] for a in blue_agents])
             red_done = np.all([dones[a] for a in red_agents])
             dones = {"blue": blue_done, "red": red_done}
+            done_all = np.all(list(dones.values()))
 
             reward_blue = sum([rewards[a] for a in blue_agents])
             reward_red = sum([rewards[a] for a in red_agents])
+
+            episode_reward_blue += reward_blue
+            episode_reward_red += reward_red
 
             # Store transition in replay buffer
             # Flatten structures and store:
@@ -375,29 +425,53 @@ if __name__ == "__main__":
 
             # Training step
             if len(rb) > batch_size:
-                if len(rb) > batch_size:
-                    batch = rb.sample(batch_size)
-                    field_names = list(batch.keys())
-                    batch_blue, batch_red = process_batch(batch, field_names, batch_size)
-                    
-                    # Now batch_blue and batch_red should have the correct shapes:
-                    # batch_blue['obs']: (B, N, 13, 13, 5)
-                    # batch_blue['actions']: (B, N)
-                    # batch_blue['rewards']: (B, N)
-                    # batch_blue['next_obs']: (B, N, 13, 13, 5)
-                    # batch_blue['state']: (B, 45, 45, 5)
-                    # batch_blue['next_state']: (B, 45, 45, 5)
-                    # batch_blue['dones']: (B, N)
-                    
-                    qmix_blue.update(batch_blue)
-                    qmix_red.update(batch_red)
-                if count % 1 == 0:
+                batch = rb.sample(batch_size)
+                field_names = list(batch.keys())
+                batch_blue, batch_red = process_batch(batch, field_names, batch_size)
+                
+                # Now batch_blue and batch_red should have the correct shapes:
+                # batch_blue['obs']: (B, N, 13, 13, 5)
+                # batch_blue['actions']: (B, N)
+                # batch_blue['rewards']: (B, N)
+                # batch_blue['next_obs']: (B, N, 13, 13, 5)
+                # batch_blue['state']: (B, 45, 45, 5)
+                # batch_blue['next_state']: (B, 45, 45, 5)
+                # batch_blue['dones']: (B, N)
+                
+                loss_blue = qmix_blue.update(batch_blue)
+                loss_red = qmix_red.update(batch_red)
+
+                wandb.log({
+                        "loss_blue": loss_blue.item(),
+                        "loss_red": loss_red.item(),
+                        "epsilon": epsilon,
+                    })
+                if count % update_step == 0:
                     qmix_blue.update_target()
                     qmix_red.update_target()
-                    print("update target")
-                # break
-    print(count)
+                    print(count)
+                if count == 1000:
+                    print(terminated)
+        if count == 1000:
+            print(terminated)
+        wandb.log({
+        "episode_reward_blue": episode_reward_blue,
+        "episode_reward_red": episode_reward_red,
+        "episode": ep
+    })
+        # After training:
+        # if ep % 50 == 0:
+        #     # Save models
+        #     torch.save(qmix_blue.agent_q_network.state_dict(), f"./model/qmix_blue_ep{ep}.pth")
+        #     torch.save(qmix_red.agent_q_network.state_dict(), f"./model/qmix_red_ep{ep}.pth")
+
+        #     # # Log the saved models to wandb
+        #     # wandb.save(f"qmix_blue_ep{ep}.pth")
+        #     # wandb.save(f"qmix_red_ep{ep}.pth")
+
+    wandb.finish()
+
+    print("Training complete.")
     # After training:
     # The Q-networks and mixing network learned to produce coordinated policies.
     # Blue agents should better focus fire and coordinate attacks to secure kills efficiently.
-    print(count)
