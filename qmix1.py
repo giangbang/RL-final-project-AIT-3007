@@ -9,18 +9,6 @@ from agilerl.vector.pz_async_vec_env import AsyncPettingZooVecEnv
 from typing import List
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-# create Envs class store many single environment and get
-class Envs:
-    def __init__(self, config: dict):
-        self.num_envs = config['num_envs']
-
-    def init_envs(self):
-        # self.envs: List[battle_v4.env]= [battle_v4.env(map_size=45, max_cycles=1000) for _ in range(self.num_envs)]
-        pass 
-
-    def get_last(self):
-        # self.lasts = [[obs, reward, termination, truncation, infor = self.envs[i].last()] for i in range(self.num_envs)]
-        pass #
 
 # -------------------------
 # Q-Network for Agents
