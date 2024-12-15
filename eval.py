@@ -1,5 +1,6 @@
 from magent2.environments import battle_v4
 from torch_model import QNetwork
+from final_torch_model import QNetwork as FinalQNetwork
 import torch
 import numpy as np
 
@@ -40,9 +41,10 @@ def eval():
     red_q_network = QNetwork(
         env.observation_space("red_0").shape, env.action_space("red_0").n
     )
-    red_q_network.load_state_dict(torch.load("red.pt", map_location=device))
-    red_q_network.to(device)
-    red_q_network.eval()
+    q_network.load_state_dict(
+        torch.load("red.pt", weights_only=True, map_location="cpu")
+    )
+    q_network.to(device)
 
     def red_pretrained_policy(env, agent, obs):
         observation = (
@@ -55,36 +57,59 @@ def eval():
             action = red_q_network(observation).argmax().item()
         return action
 
-    def run_eval(env, blue_policy, red_policy, n_episode=30):
-        results = {"blue_win": 0, "red_win": 0, "draw": 0}
+    def run_eval(env, red_policy, blue_policy, n_episode: int = 100):
+        red_win, blue_win = [], []
+        red_tot_rw, blue_tot_rw = [], []
+        n_agent_each_team = len(env.env.action_spaces) // 2
+
         for _ in tqdm(range(n_episode)):
             env.reset()
-            dones = {agent: False for agent in env.agents}
-            while not all(dones.values()):
-                for agent in env.agent_iter():
-                    obs, reward, termination, truncation, _ = env.last()
-                    if termination or truncation:
-                        action = None
-                        dones[agent] = True
+            n_dead = {"red": 0, "blue": 0}
+            red_reward, blue_reward = 0, 0
+            who_loses = None
+
+            for agent in env.agent_iter():
+                observation, reward, termination, truncation, info = env.last()
+                agent_team = agent.split("_")[0]
+                if agent_team == "red":
+                    red_reward += reward
+                else:
+                    blue_reward += reward
+
+                if env.unwrapped.frames >= max_cycles and who_loses is None:
+                    who_loses = "red" if n_dead["red"] > n_dead["blue"] else "draw"
+                    who_loses = "blue" if n_dead["red"] < n_dead["blue"] else who_loses
+
+                if termination or truncation:
+                    action = None  # this agent has died
+                    n_dead[agent_team] = n_dead[agent_team] + 1
+
+                    if (
+                        n_dead[agent_team] == n_agent_each_team
+                        and who_loses
+                        is None  # all agents are terminated at the end of episodes
+                    ):
+                        who_loses = agent_team
+                else:
+                    if agent_team == "red":
+                        action = red_policy(env, agent, observation)
                     else:
-                        if agent.startswith("blue"):
-                            action = blue_policy(env, agent, obs)
-                        else:
-                            action = red_policy(env, agent, obs)
-                    env.step(action)
-            blue_alive = sum(
-                1 for agent in env.agents if agent.startswith("blue")
-            )
-            red_alive = sum(
-                1 for agent in env.agents if agent.startswith("red")
-            )
-            if blue_alive > red_alive:
-                results["blue_win"] += 1
-            elif red_alive > blue_alive:
-                results["red_win"] += 1
-            else:
-                results["draw"] += 1
-        return results
+                        action = blue_policy(env, agent, observation)
+
+                env.step(action)
+
+            red_win.append(who_loses == "blue")
+            blue_win.append(who_loses == "red")
+
+            red_tot_rw.append(red_reward / n_agent_each_team)
+            blue_tot_rw.append(blue_reward / n_agent_each_team)
+
+        return {
+            "winrate_red": np.mean(red_win),
+            "winrate_blue": np.mean(blue_win),
+            "average_rewards_red": np.mean(red_tot_rw),
+            "average_rewards_blue": np.mean(blue_tot_rw),
+        }
 
     print("=" * 20)
     print("Eval: Blue (trained) vs Red (random)")
@@ -104,6 +129,17 @@ def eval():
             env=env,
             blue_policy=blue_pretrained_policy,
             red_policy=red_pretrained_policy,
+            n_episode=30,
+        )
+    )
+    print("=" * 20)
+
+    print("Eval with final trained policy")
+    print(
+        run_eval(
+            env=env,
+            red_policy=final_pretrain_policy,
+            blue_policy=random_policy,
             n_episode=30,
         )
     )
