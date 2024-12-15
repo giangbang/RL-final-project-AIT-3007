@@ -4,13 +4,16 @@ import torch.optim as optim
 import numpy as np
 from magent2.environments import battle_v4
 from agilerl.components.multi_agent_replay_buffer import MultiAgentReplayBuffer
-from agilerl.vector.pz_async_vec_env import AsyncPettingZooVecEnv
+# from agilerl.vector.pz_async_vec_env import AsyncPettingZooVecEnv
+# from magent2.
 import wandb
-
+import supersuit
 from typing import List
+# load pretrained model from torchvision
+import torchvision.models as models
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-
+torch.set_float32_matmul_precision('high')
 # -------------------------
 # Q-Network for Agents
 # -------------------------
@@ -22,16 +25,35 @@ class AgentQNetwork(nn.Module):
         super().__init__()
         # Input: (13,13,5)
         self.conv = nn.Sequential(
-            nn.Conv2d(5, 16, kernel_size=3, padding=1),
+            nn.Conv2d(5, 32, kernel_size=3),
+            nn.BatchNorm2d(32),
             nn.ReLU(),
-            nn.Conv2d(16, 32, kernel_size=3, padding=1),
-            nn.ReLU()
+            # nn.MaxPool2d(2),  # Reduces H and W by half
+            nn.Conv2d(32, 64, kernel_size=3, dilation=2),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            # nn.MaxPool2d(2),
+            nn.Conv2d(64, 128, kernel_size=3, dilation=2),
+            nn.ReLU(),
         )
+
         self.fc = nn.Sequential(
-            nn.Linear(32*13*13, 256),
+            nn.Linear(128*3*3, 512),
             nn.ReLU(),
-            nn.Linear(256, num_actions)
+            nn.Linear(512, num_actions)
         )
+        self._initialize_weights()
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.BatchNorm2d):
+                # BatchNorm: ones for weights, zeros for biases
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
 
     def forward(self, obs):
         # obs shape: (batch, N_agents, 13,13,5)
@@ -59,19 +81,59 @@ class MixingNetwork(nn.Module):
         self.conv = nn.Sequential(
             nn.Conv2d(5, 16, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.Conv2d(16, 16, kernel_size=3, padding=1),
+            nn.Conv2d(16, 32, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.AdaptiveAvgPool2d((1,1))
         )
-        # After pooling: 16 dims
-        self.hyper_w_1 = nn.Linear(16, num_agents*embed_dim)
-        self.hyper_b_1 = nn.Linear(16, embed_dim)
-
-        self.hyper_w_final = nn.Linear(16, embed_dim)
-        self.hyper_b_final = nn.Linear(16, 1)
-
+        # After pooling: 16 dims  
+        self.state_dim = 32 
         self.num_agents = num_agents
-        self.embed_dim = embed_dim
+        self.embedding_dim = embed_dim
+        # Layers for hypernetwork
+        self.hyper_w_1 = nn.Sequential(
+        nn.Linear(self.state_dim, self.embedding_dim),
+        nn.ReLU(),
+        nn.Linear(self.embedding_dim, self.num_agents * self.embedding_dim)
+        )
+        self.hyper_w_final = nn.Sequential(
+        nn.Linear(self.state_dim, self.embedding_dim),
+        nn.ReLU(),
+        nn.Linear(self.embedding_dim, self.embedding_dim)
+        )
+
+        self.hyper_b_1 = nn.Linear(self.state_dim, self.embedding_dim)
+        self.hyper_b_final = nn.Sequential(
+        nn.Linear(self.state_dim, self.embedding_dim),
+        nn.ReLU(),
+        nn.Linear(self.embedding_dim, 1)
+        )
+        self._initialize_weights()
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                # Conv layers: Kaiming initialization with fan_out mode
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+                    
+            elif isinstance(m, nn.BatchNorm2d):
+                # BatchNorm: ones for weights, zeros for biases
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+                
+            elif isinstance(m, nn.Linear):
+                # Different initialization for different linear layers
+                if m in self.hyper_w_1.modules() or m in self.hyper_w_final.modules():
+                    # Hypernetwork weights: scaled-down Kaiming initialization
+                    nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
+                    m.weight.data.mul_(0.1)
+                else:
+                    # Other linear layers: regular Kaiming initialization
+                    nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
+                
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
 
     def forward(self, agent_qs, state):
         # agent_qs: (B, N)
@@ -81,13 +143,13 @@ class MixingNetwork(nn.Module):
         # Encode state
         state = state.permute(0,3,1,2).float() # (B, C, H, W)
         s = self.conv(state)
-        s = s.view(B, -1) # (B, 16)
+        s = s.view(B, -1) # (B, 32)
 
-        w1 = torch.abs(self.hyper_w_1(s)).view(B, self.num_agents, self.embed_dim) # ensure non-negativity if needed
-        b1 = self.hyper_b_1(s).view(B, 1, self.embed_dim)
+        w1 = torch.abs(self.hyper_w_1(s)).view(B, self.num_agents, self.embedding_dim) # ensure non-negativity if needed
+        b1 = self.hyper_b_1(s).view(B, 1, self.embedding_dim)
         hidden = torch.relu(torch.bmm(agent_qs.unsqueeze(1), w1) + b1) # (B, 1, embed_dim)
 
-        w_final = torch.abs(self.hyper_w_final(s)).view(B, self.embed_dim, 1)
+        w_final = torch.abs(self.hyper_w_final(s)).view(B, self.embedding_dim, 1)
         b_final = self.hyper_b_final(s).view(B, 1, 1)
 
         q_tot = torch.bmm(hidden, w_final) + b_final # (B, 1, 1)
@@ -104,21 +166,31 @@ class QMIX:
         self.agent_ids = agent_ids
 
         self.agent_q_network = AgentQNetwork(num_actions=num_actions)
+        # self.agent_q_network = torch,nn.DataParallel(self.agent_q_network)
         self.agent_q_network.to(device)
+        self.agent_q_network = torch.compile(self.agent_q_network)
+
         self.mixing_network = MixingNetwork(num_agents, state_shape=state_shape)
+        # self.mixing_network = torch.nn.DataParallel(self.mixing_network)
         self.mixing_network.to(device)
+        self.mixing_network = torch.compile(self.mixing_network)
         
         self.target_agent_q_network = AgentQNetwork(num_actions=num_actions)
+        # self.target_agent_q_network = torch.nn.DataParallel(self.target_agent_q_network)
         self.target_agent_q_network.to(device)
+        self.target_agent_q_network = torch.compile(self.target_agent_q_network)
+
         self.target_mixing_network = MixingNetwork(num_agents, state_shape=state_shape)
+        # self.target_mixing_network = torch.nn.DataParallel(self.target_mixing_network)
         self.target_mixing_network.to(device)
+        self.target_mixing_network = torch.compile(self.target_mixing_network)  
         
         # Load weights to target
         self.target_agent_q_network.load_state_dict(self.agent_q_network.state_dict())
         self.target_mixing_network.load_state_dict(self.mixing_network.state_dict())
 
-        self.optimizer = optim.Adam(list(self.agent_q_network.parameters()) + list(self.mixing_network.parameters()), lr=lr)
-
+        self.optimizer = optim.Adam(list(self.agent_q_network.parameters()) + list(self.mixing_network.parameters()), lr=lr, weight_decay=1e-4)
+        self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=20, T_mult=2, eta_min=1e-6 )
         # Watch models with wandb
         wandb.watch(self.agent_q_network, log_freq=100)
         wandb.watch(self.mixing_network, log_freq=100)
@@ -177,17 +249,23 @@ class QMIX:
 
         self.optimizer.zero_grad()
         loss.backward()
-        self.optimizer.step()
 
+        torch.nn.utils.clip_grad_norm_(self.agent_q_network.parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(self.mixing_network.parameters(), max_norm=1.0)
+
+        self.optimizer.step()
+        self.scheduler.step()
         return loss
     # TODO:
     # Soft update or periodic hard update of target networks
     # Here we do periodic hard update:
-    def update_target(self):
+    
+    def update_target(self, tau=0.4):
         for param, target_param in zip(self.agent_q_network.parameters(), self.target_agent_q_network.parameters()):
-            target_param.data.copy_(param.data)
+            target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
         for param, target_param in zip(self.mixing_network.parameters(), self.target_mixing_network.parameters()):
-            target_param.data.copy_(param.data)
+            target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
+
 
 # -------------------------
 # Training Loop (Conceptual)
@@ -270,22 +348,7 @@ def process_batch(batch, field_names, batch_size):
             
     return batch_blue, batch_red
 
-if __name__ == "__main__":
-    import supersuit as ss
-    wandb.login(key="37d305fc5fac9b15b88ec48208250be56185986e")
-        # Initialize wandb
-    wandb.init(project="QMIX_Project 1", config={ 
-        "learning_rate": 1e-3,
-        "batch_size": 32,
-        "gamma": 0.99,
-        "epsilon_start": 1.0,
-        "epsilon_decay": 0.9998,
-        "epsilon_min": 0.05,
-        "num_episodes": 50,
-        "update_step" : 10
-    })
-    config = wandb.config
-
+def train(config):
     # Update variables with config values
     num_episodes = config.num_episodes
     batch_size = config.batch_size
@@ -299,7 +362,7 @@ if __name__ == "__main__":
     num_envs = 2 
     # env = battle_v4.parallel_env(map_size=30, minimap_mode=False, max_cycles=300, seed=10)
     env = battle_v4.parallel_env(map_size=45, minimap_mode=False, step_reward=-0.005,
-            dead_penalty=-0.1, attack_penalty=-0.1, attack_opponent_reward=0.2, max_cycles=1000, 
+            dead_penalty=-0.1, attack_penalty=-0.1, attack_opponent_reward=0.2, max_cycles=200, 
             extra_features=False)
     env = ss.black_death_v3(env)
     # env = ss.pad_observations_v0(env)
@@ -333,7 +396,6 @@ if __name__ == "__main__":
         lr=learning_rate,
         gamma=gamma
     )
-    # Off-policy training: we need a replay buffer
     # rb = MultiAgentReplayBuffer(
     #     memory_size=100000,
     #     field_names=["obs", "action", "reward", "next_obs", "done", "state", "next_state"],
@@ -341,13 +403,8 @@ if __name__ == "__main__":
     #     device="cpu"
     # )
     field_names = ["obs", "actions", "rewards", "next_obs", "dones", "state", "next_state"]
-    rb = ReplayBuffer(memory_size=1000,
+    rb = ReplayBuffer(memory_size=10000,
          field_names=field_names)
-
-    num_episodes = 1
-    batch_size = 2
-    epsilon = 1.0
-    epsilon_decay = 0.999
 
     count = 0
     for ep in range(num_episodes):
@@ -359,17 +416,20 @@ if __name__ == "__main__":
         episode_reward_blue = 0
         episode_reward_red = 0
 
+        blue_agents = [agent for agent in env.agents if agent.startswith("blue")]
+        red_agents = [agent for agent in env.agents if agent.startswith("red")]
         terminated = False
+
         while not terminated:
             
-            count += 1
+            # count += 1
             # Convert obs to batch form
-            blue_agents = [agent for agent in env.agents if agent.startswith("blue")]
+            # blue_agents = [agent for agent in env.agents if agent.startswith("blue")]
             obs_array_blue = np.stack([obs[a] for a in blue_agents], axis=0)
             qmix_blue.agent_ids = blue_agents
             actions_blue = qmix_blue.select_actions(torch.from_numpy(obs_array_blue).to(device), epsilon=epsilon) # return shape: (N_agents,)
 
-            red_agents = [agent for agent in env.agents if agent.startswith("red")]
+            # red_agents = [agent for agent in env.agents if agent.startswith("red")]
             qmix_red.agent_ids = red_agents
             obs_array_red = np.stack([obs[a] for a in red_agents], axis=0)
             actions_red = qmix_red.select_actions(torch.from_numpy(obs_array_red).to(device), epsilon=epsilon) # return shape: (N_agents,)
@@ -388,10 +448,10 @@ if __name__ == "__main__":
                 dones[agent] = terminations[agent] or truncations[agent]
 
             next_global_state = env.state()
-
+            blue_agents = [agent for agent in env.agents if agent.startswith("blue_")]
+            red_agents = [agent for agent in env.agents if agent.startswith("red_")]
             # Compute rewards: sum or average relevant ones for blue agents
             # The environment: each agent gets individual reward. We can sum them for QMIX training
-            # done_all = np.all(list(dones.values()))
             blue_done = np.all([dones[a] for a in blue_agents])
             red_done = np.all([dones[a] for a in red_agents])
             dones = {"blue": blue_done, "red": red_done}
@@ -421,10 +481,11 @@ if __name__ == "__main__":
             terminated = done_all
 
             # After episode, decay epsilon
-            epsilon = max(epsilon * epsilon_decay, 0.05)
+            epsilon = max(epsilon * epsilon_decay, epsilon_min)
 
             # Training step
             if len(rb) > batch_size:
+                count += 1
                 batch = rb.sample(batch_size)
                 field_names = list(batch.keys())
                 batch_blue, batch_red = process_batch(batch, field_names, batch_size)
@@ -445,33 +506,129 @@ if __name__ == "__main__":
                         "loss_blue": loss_blue.item(),
                         "loss_red": loss_red.item(),
                         "epsilon": epsilon,
+                        "loss" : loss_blue.item() + loss_red.item()
                     })
                 if count % update_step == 0:
                     qmix_blue.update_target()
                     qmix_red.update_target()
                     print(count)
-                if count == 1000:
-                    print(terminated)
-        if count == 1000:
-            print(terminated)
+
         wandb.log({
         "episode_reward_blue": episode_reward_blue,
         "episode_reward_red": episode_reward_red,
         "episode": ep
-    })
-        # After training:
-        # if ep % 50 == 0:
-        #     # Save models
-        #     torch.save(qmix_blue.agent_q_network.state_dict(), f"./model/qmix_blue_ep{ep}.pth")
-        #     torch.save(qmix_red.agent_q_network.state_dict(), f"./model/qmix_red_ep{ep}.pth")
+        })
+        if ep+1 % 20 == 0:
+                save_path_blue = os.path.join("./model", f"qmix_blue_ep{ep}.pth")
+                save_path_red = os.path.join("./model", f"qmix_red_ep{ep}.pth")
+                torch.save(qmix_blue.agent_q_network.state_dict(), save_path_blue)
+                torch.save(qmix_red.agent_q_network.state_dict(), save_path_red)
 
-        #     # # Log the saved models to wandb
-        #     # wandb.save(f"qmix_blue_ep{ep}.pth")
-        #     # wandb.save(f"qmix_red_ep{ep}.pth")
 
     wandb.finish()
-
     print("Training complete.")
     # After training:
     # The Q-networks and mixing network learned to produce coordinated policies.
     # Blue agents should better focus fire and coordinate attacks to secure kills efficiently.
+    
+import argparse
+
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description="QMIX training for MAgent2 battle environment")
+    
+    # Training hyperparameters
+    parser.add_argument("--learning_rate", type=float, default=1e-3,
+                        help="Learning rate for training")
+    parser.add_argument("--batch_size", type=int, default=128,
+                        help="Batch size for training")
+    parser.add_argument("--gamma", type=float, default=0.99,
+                        help="Discount factor")
+    parser.add_argument("--epsilon_start", type=float, default=1.0,
+                        help="Starting value of epsilon for epsilon-greedy exploration")
+    parser.add_argument("--epsilon_decay", type=float, default=0.9998,
+                        help="Decay rate of epsilon")
+    parser.add_argument("--epsilon_min", type=float, default=0.06,
+                        help="Minimum value of epsilon")
+    parser.add_argument("--num_episodes", type=int, default=50,
+                        help="Number of episodes to train")
+    parser.add_argument("--update_step", type=int, default=200,
+                        help="Number of steps between target network updates")
+    
+    # # Environment parameters
+    # parser.add_argument("--map_size", type=int, default=45,
+    #                     help="Size of the battle map")
+    # parser.add_argument("--max_cycles", type=int, default=1000,
+    #                     help="Maximum number of cycles per episode")
+    
+    # # Wandb parameters
+    # parser.add_argument("--wandb_project", type=str, default="QMIX_Project_1",
+    #                     help="Name of the wandb project")
+    # parser.add_argument("--wandb_key", type=str, required=True,
+    #                     help="Wandb API key")
+    # parser.add_argument("--use_wandb", action="store_true",
+    #                     help="Whether to use wandb for logging")
+    
+    # # Model parameters
+    # parser.add_argument("--save_model", action="store_true",
+    #                     help="Whether to save model checkpoints")
+    # parser.add_argument("--model_dir", type=str, default="./model",
+    #                     help="Directory to save model checkpoints")
+    # parser.add_argument("--save_interval", type=int, default=50,
+    #                     help="Number of episodes between model saves")
+    
+    args = parser.parse_args()
+    return args
+
+if __name__ == "__main__":
+    import supersuit as ss
+    import os
+
+    args = parse_args()
+    
+    wandb.login(key="")
+        # Initialize wandb
+    wandb.init(
+        project="QMIX_Project_1",
+        config={
+            "learning_rate": args.learning_rate,
+            "batch_size": args.batch_size,
+            "gamma": args.gamma,
+            "epsilon_start": args.epsilon_start,
+            "epsilon_decay": args.epsilon_decay,
+            "epsilon_min": args.epsilon_min,
+            "num_episodes": args.num_episodes,
+            "update_step": args.update_step,
+        }
+    )
+    config = wandb.config
+
+    train(config)
+
+
+
+
+
+
+
+
+
+
+
+    # sweep_configuration = {
+    #     "method" : "bayes",
+    #     "name" : "QMIX_Project 2",
+    #     "metric" : {"name" : "loss", "goal" : "minimize"},
+    #     "parameters" : {
+    #         "learning_rate" : {"min" : 5e-4, "max" : 2e-3},
+    #         "batch_size" : {"values" : [16, 64, 256, ]},
+    #         "gamma" : {"values" : [0.6, 0.7, 0.9, 0.99]},
+    #         "epsilon_start" : {"value" : 1.0},
+    #         "epsilon_decay" : {"value" : 0.9999},
+    #         "epsilon_min" : {"value" : 0.05},
+    #         "num_episodes" : {"value" : 10000},
+    #         "update_step" : {"values" : [5, 40, 100]}
+    #     }
+    # }
+    # sweep_id = wandb.sweep(sweep_configuration, project="QMIX_Project 1")
+    # wandb.agent(sweep_id=sweep_id, function=train(config), count=10)
