@@ -1,0 +1,26 @@
+program: qmix1.py
+method: bayes  
+name: qmix_sweep_1
+metric:
+  name: episode_reward
+  goal: maximize
+
+parameters:
+  learning_rate:
+    distribution: uniform
+    min: 0.0005
+    max: 0.002
+  batch_size:
+    values: [16, 64, 256]
+  gamma:
+    values: [0.6, 0.7, 0.9, 0.99]
+  epsilon_start:
+    value: 1.0
+  epsilon_decay: 
+    value: 0.9999
+  epsilon_min:
+    value: 0.05
+  num_episodes:
+    value: 10000
+  update_step:
+    values: [5, 40, 100]
