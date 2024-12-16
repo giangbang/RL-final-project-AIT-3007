@@ -23,7 +23,6 @@ class ReplayBufferGRU:
     'hidden_in' and 'hidden_out' are only the initial hidden state for each episode, for GRU initialization.
 
     """
-
     def __init__(self, capacity):
         self.capacity = capacity
         self.buffer = []
@@ -63,8 +62,7 @@ class ReplayBufferGRU:
             nobs_lst.append(next_observation[start_idx:end_idx])
         return hi_lst, ho_lst, obs_lst, s_lst, ns_lst, a_lst, r_lst, nobs_lst
 
-    def __len__(
-            self):  # cannot work in multiprocessing case, len(replay_buffer) is not available in proxy of manager!
+    def __len__(self):  # cannot work in multiprocessing case, len(replay_buffer) is not available in proxy of manager!
         return len(self.buffer)
 
     def get_length(self):
@@ -149,12 +147,8 @@ class RNNAgent(nn.Module):
                 
         # Feature extraction from 2D observation
         state = self.feature_extractor(state)  # [batch, sequence, agents, cnn_features]
-
         state = state.permute(1, 0, 2, 3)
-        # Concatenate with action
-        # x = torch.cat([state, action], -1)
-        # x = x.view(seq_len, bs*n_agents, -1) # change x to [#sequence, #batch*#agent, -1] to meet rnn's input requirement
-        
+
         # Reshape for RNN input
         x = state.reshape(seq_len, bs*n_agents, -1)  # [sequence, batch*agents, features]   
         hidden_in = hidden_in.view(1, bs*n_agents, -1)
@@ -325,6 +319,9 @@ class QMix_Trainer():
                                 episode_reward, episode_next_observation)
 
     def update(self, batch_size):
+        current_loss = 100
+        total_epoch = 0
+        num_epoch = 100
         # 1. Lấy batch từ replay buffer
         hidden_in, hidden_out, observation, state, next_state, action, reward, next_observation = self.replay_buffer.sample(
             batch_size)
@@ -344,31 +341,38 @@ class QMix_Trainer():
         action = torch.LongTensor(action).to(device) # [#batch, sequence, #agents, #action_shape]
         reward = torch.FloatTensor(reward).unsqueeze(-1).to(device) # reward is scalar, add 1 dim to be [reward] at the same dim
 
-        # 2. Tính current Q values
-        agent_outs, _ = self.agent(observation, hidden_in) # [#batch, #sequence, #agent, action_shape, num_actions]
-        chosen_action_qvals = torch.gather(  # [#batch, #sequence, #agent, action_shape]
-            agent_outs, dim=-1, index=action.unsqueeze(-1)).squeeze(-1)
-        qtot = self.mixer(chosen_action_qvals, state) # [#batch, #sequence, 1]
+        while(current_loss > 0.1 and total_epoch < 10):
+            for epoch in range(1, num_epoch + 1):
+                # 2. Tính current Q values
+                agent_outs, _ = self.agent(observation, hidden_in) # [#batch, #sequence, #agent, action_shape, num_actions]
+                chosen_action_qvals = torch.gather(  # [#batch, #sequence, #agent, action_shape]
+                    agent_outs, dim=-1, index=action.unsqueeze(-1)).squeeze(-1)
+                qtot = self.mixer(chosen_action_qvals, state) # [#batch, #sequence, 1]
 
-        # 3. Tính target Q values
-        target_agent_outs, _ = self.target_agent(next_observation, hidden_out)
-        target_max_qvals = target_agent_outs.max(dim=-1, keepdim=True)[0] # [#batch, #sequence, #agents, action_shape]
-        target_qtot = self.target_mixer(target_max_qvals, next_state)
+                # 3. Tính target Q values
+                target_agent_outs, _ = self.target_agent(next_observation, hidden_out)
+                target_max_qvals = target_agent_outs.max(dim=-1, keepdim=True)[0] # [#batch, #sequence, #agents, action_shape]
+                target_qtot = self.target_mixer(target_max_qvals, next_state)
 
-        # 4. Tính reward và targets
-        reward, env_rewards, strategy_rewards = _calc_reward(reward, state, action, self.lambda_reward)
-        targets = self._build_td_lambda_targets(reward, target_qtot)
+                # 4. Tính reward và targets
+                reward_epoch, env_rewards, strategy_rewards = _calc_reward(reward, state, action, self.lambda_reward)
+                targets = self._build_td_lambda_targets(reward_epoch, target_qtot)
 
-        # 5. Tính loss và update
-        loss = self.criterion(qtot, targets.detach())
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
+                # 5. Tính loss và update
+                loss = self.criterion(qtot, targets.detach())
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
 
-        self.update_cnt += 1
-        if self.update_cnt % self.target_update_interval == 0:
-            self._update_targets()
+                self.update_cnt += 1
+                if self.update_cnt % self.target_update_interval == 0:
+                    self._update_targets()
+                
+                current_loss = loss.item()
             
+                if epoch % 100:
+                    print(f'Epoch {epoch}/{total_epoch}, Loss: {current_loss}')
+            total_epoch += 1
         # Decay epsilon after each update
         self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
         self.agent.epsilon = self.epsilon
