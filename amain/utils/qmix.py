@@ -9,6 +9,10 @@ from torch.nn import functional as F
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
 torch.set_float32_matmul_precision('medium')
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torchvision.models as models
 
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels, padding=1):
@@ -39,210 +43,196 @@ class ResidualBlock(nn.Module):
 
 class AgentQNetwork(nn.Module):
     """
-    This network takes agent observations as input and produces Q-values for each action.
+    Simplified Q-Network for agents with optional Swin Transformer.
     """
-    def __init__(self, num_actions=21):
+    def __init__(self, num_actions=21, use_swin=True):
         super().__init__()
         
-        # Initial conv to process the input
+        # Initial convolution layers
         self.input_conv = nn.Sequential(
-            nn.Conv2d(5, 16, kernel_size=3, padding=1),
-            nn.BatchNorm2d(16),
-            nn.ReLU()
-        )
-        
-        # Residual blocks
-        self.res_blocks = nn.Sequential(
-            ResidualBlock(16, 32),
+            nn.Conv2d(5, 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
             ResidualBlock(32, 64),
-            ResidualBlock(64, 32),
-            ResidualBlock(32, 16),
-            ResidualBlock(16, 8)
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Conv2d(64, 16, kernel_size=3, padding=1, dilation=2),
+            nn.BatchNorm2d(16),
+            nn.ReLU(),
+            nn.Conv2d(16, 3, kernel_size=3, padding=1, dilation=2),
         )
         
-        # Final convolution to match Swin input
-        self.final_conv = nn.Sequential(
-            nn.Conv2d(8, 3, kernel_size=3, padding=1),
-            nn.BatchNorm2d(3),
-            nn.ReLU()
-        )
-        
-        # Swin Transformer for feature extraction
-        self.swin = models.swin_v2_t(weights='IMAGENET1K_V1')
-
-        # setting learning rate of swin to small number
-     
-
-
-        # turn off gradients for the swin model
-        for param in self.swin.parameters():
-            param.requires_grad = False
+        # Optional Swin Transformer
+        self.use_swin = use_swin
+        if self.use_swin:
+            self.swin = models.efficientnet_b0(weights='IMAGENET1K_V1')
+            # Allow fine-tuning with a smaller learning rate
+            for param in self.swin.parameters():
+                param.requires_grad = False 
+            
+            # Modify Swin to output desired feature size
+            self.swin.head = nn.Identity()
+            swin_output_dim = 1000 # Swin-T base output dimension
+        else:
+            # If not using Swin, add additional convolutional layers
+            self.additional_conv = nn.Sequential(
+                ResidualBlock(64, 128),
+                nn.BatchNorm2d(128),
+                nn.ReLU(),
+                nn.AdaptiveAvgPool2d((1,1))
+            )
+            swin_output_dim = 128
         
         # Final fully connected layer
-        self.fc = nn.Linear(1000, num_actions)
+        self.fc = nn.Linear(swin_output_dim, num_actions)
         
         self._initialize_weights()
 
-    
     def _initialize_weights(self):
-        for m in [self.res_blocks.modules(), self.input_conv.modules(), self.final_conv.modules(), self.fc.modules()]:
+        for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                # Conv layers: Kaiming initialization with fan_out mode
+                # Kaiming Initialization
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
-                    
             elif isinstance(m, nn.BatchNorm2d):
-                # BatchNorm: ones for weights, zeros for biases
+                # BatchNorm initialization
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
-                
             elif isinstance(m, nn.Linear):
+                # Linear layer initialization
                 nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
-                m.weight.data.mul_(0.1)
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
 
+    def forward(self, x):
+        """
+        Forward pass for AgentQNetwork.
 
+        Args:
+            x (torch.Tensor): Input observations with shape (batch_size, C, H, W).
 
-    def forward(self, obs):
-        # Process through conv layers with residual connections
-        # B, C, H, W = obs.size()
-        x = self.input_conv(obs)
-        x = self.res_blocks(x)
-        x = self.final_conv(x)
+        Returns:
+            torch.Tensor: Q-values for each action with shape (batch_size, num_actions).
+        """
+        x = self.input_conv(x)  # Shape: (batch_size, 64, H, W)
         
-        # Ensure the input size matches Swin's requirements
-        if x.size(-1) != 224:
+        if self.use_swin:
             x = F.interpolate(x, size=(224, 224), mode='bilinear', align_corners=False)
+            features = self.swin(x)  # Shape: (batch_size, 768)
+        else:
+            x = self.additional_conv(x)  # Shape: (batch_size, 128, 1, 1)
+            features = x.view(x.size(0), -1)  # Shape: (batch_size, 128)
         
-        # Process through Swin
-        features = self.swin(x)
-        
-        # Final Q-values
-        q = self.fc(features) # (B, num_actions)
-        # q = q.view(B, N, -1).contiguous()  # (B, T, N, num_actions)
-        
-        return q
-    def get_params_groups(self):
-        """
-        Group parameters for different learning rates
-        """
-        swin_params = list(self.swin.parameters())
-        other_params = (list(self.input_conv.parameters()) + 
-                       list(self.res_blocks.parameters()) +
-                       list(self.final_conv.parameters()) +
-                       list(self.fc.parameters()))
-        
-        return {
-            'swin': swin_params,
-            'other': other_params
-        }
+        q_values = self.fc(features)  # Shape: (batch_size, num_actions)
+        return q_values
+
 
 # -------------------------
 # Mixing Network
 # -------------------------
 class MixingNetwork(nn.Module):
-    def __init__(self, num_agents, state_shape=(45,45,5), embed_dim=32):
+    def __init__(self, num_agents, state_shape=(45,45,5), embed_dim=32, use_attention=True):
         """
-        This network takes agent Q-values and global state as input
-        and produces a single Q-value for the team.
+        Mixing network for QMIX with optional attention mechanism.
+        
+        Args:
+            num_agents (int): Number of agents.
+            state_shape (tuple): Shape of the global state.
+            embed_dim (int): Embedding dimension for hypernetworks.
+            use_attention (bool): Whether to use attention mechanism.
         """
         super().__init__()
-        # We'll encode the state with a CNN or a small network
-
-        self.conv = nn.Sequential(
-            ResidualBlock(5, 16),
-            nn.Conv2d(16, 16, kernel_size=3),
-            ResidualBlock(16, 32),
-            nn.Conv2d(32, 32, kernel_size=3),
-            ResidualBlock(32, 64),
-            nn.Conv2d(64, 64, kernel_size=3),
-            ResidualBlock(64, 32),
-            nn.Conv2d(32, 32, kernel_size=3),
-            ResidualBlock(32, 16),
-            nn.Conv2d(16, 16, kernel_size=3),
-            nn.AdaptiveAvgPool2d((1,1))
-        )
-        # After pooling: 16 dims  
-        self.state_dim = 16 
         self.num_agents = num_agents
-        self.embedding_dim = embed_dim
-        # Layers for hypernetwork
-        self.hyper_w_1 = nn.Sequential(
-                nn.Linear(self.state_dim, self.embedding_dim),
-                nn.ReLU(),
-                nn.Linear(self.embedding_dim, self.num_agents * self.embedding_dim)
-                )
-        self.hyper_w_final = nn.Sequential(
-                nn.Linear(self.state_dim, self.embedding_dim),
-                nn.ReLU(),
-                nn.Linear(self.embedding_dim, self.embedding_dim)
-                )
+        self.embed_dim = embed_dim
+        self.use_attention = use_attention
 
-        self.hyper_b_1 = nn.Linear(self.state_dim, self.embedding_dim)
+        # Simplified state encoder
+        self.state_encoder = nn.Sequential(
+            nn.Conv2d(state_shape[2], 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            ResidualBlock(32, 64),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d((1,1))  # Output: (batch_size, 64, 1, 1)
+        )
+        self.state_dim = 64
+
+        # Hypernetworks for weights
+        self.hyper_w_1 = nn.Sequential(
+            nn.Linear(self.state_dim, embed_dim),
+            nn.ReLU(),
+            nn.Linear(embed_dim, num_agents * embed_dim)
+        )
+        self.hyper_w_final = nn.Sequential(
+            nn.Linear(self.state_dim, embed_dim),
+            nn.ReLU(),
+            nn.Linear(embed_dim, embed_dim)
+        )
+
+        # Hypernetworks for biases
+        self.hyper_b_1 = nn.Linear(self.state_dim, embed_dim)
         self.hyper_b_final = nn.Sequential(
-                nn.Linear(self.state_dim, self.embedding_dim),
-                nn.ReLU(),
-                nn.Linear(self.embedding_dim, 1)
-                )
+            nn.Linear(self.state_dim, embed_dim),
+            nn.ReLU(),
+            nn.Linear(embed_dim, 1)
+        )
+        
+        # Optional attention mechanism
+        if self.use_attention:
+            self.attention = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=4, batch_first=True)
+
         self._initialize_weights()
 
     def _initialize_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                # Conv layers: Kaiming initialization with fan_out mode
+                # Kaiming Initialization
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
-                    
             elif isinstance(m, nn.BatchNorm2d):
-                # BatchNorm: ones for weights, zeros for biases
+                # BatchNorm initialization
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
-                
             elif isinstance(m, nn.Linear):
-                # Different initialization for different linear layers
-                if m in self.hyper_w_1.modules() or m in self.hyper_w_final.modules():
-                    # Hypernetwork weights: scaled-down Kaiming initialization
-                    nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
-                    m.weight.data.mul_(0.1)
-                else:
-                    # Other linear layers: regular Kaiming initialization
-                    nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
-                
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-        # init weights
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
-                nn.init.kaiming_normal_(m.weight)
+                # Linear layer initialization
+                nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
 
     def forward(self, agent_qs, state):
-        # agent_qs: (B, N)
-        # state: (B, H, W, C)
-        B, C, H, W = state.size()
+        """
+        Forward pass for MixingNetwork.
+        
+        Args:
+            agent_qs (torch.Tensor): Agent Q-values with shape (batch_size, num_agents).
+            state (torch.Tensor): Global state with shape (batch_size, C, H, W).
+        
+        Returns:
+            torch.Tensor: Total Q-value with shape (batch_size, 1).
+        """
+        batch_size = state.size(0)
+        state = self.state_encoder(state).view(batch_size, -1)  # Shape: (batch_size, state_dim)
 
-        # # Encode state
-        # state = state.permute(0,1,4,2,3).contiguous().float() # (B,T, C, H, W)
-        # state = state.view(-1, 5, 45, 45).contiguous() # (B*T, C, H, W)
-        # # agent_qs = agent_qs.view(B*T, N).contiguous() # (B*T, N)
-        s = self.conv(state)
-        s = s.view(B, -1) # (B, 32)
+        # Generate hypernetwork weights and biases
+        w1 = torch.abs(self.hyper_w_1(state)).view(batch_size, self.num_agents, self.embed_dim)  # (batch_size, num_agents, embed_dim)
+        b1 = self.hyper_b_1(state).view(batch_size, 1, self.embed_dim)  # (batch_size, 1, embed_dim)
+        hidden = F.relu(torch.bmm(agent_qs.unsqueeze(1), w1) + b1)  # (batch_size, 1, embed_dim)
 
-        w1 = torch.abs(self.hyper_w_1(s)).view(B, self.num_agents, self.embedding_dim) # ensure non-negativity if needed
-        b1 = self.hyper_b_1(s).view(B, 1, self.embedding_dim)
-        hidden = torch.relu(torch.bmm(agent_qs.unsqueeze(1), w1) + b1) # (B*T, 1, embed_dim)
+        w_final = torch.abs(self.hyper_w_final(state)).view(batch_size, self.embed_dim, 1)  # (batch_size, embed_dim, 1)
+        b_final = self.hyper_b_final(state).view(batch_size, 1, 1)  # (batch_size, 1, 1)
 
-        w_final = torch.abs(self.hyper_w_final(s)).view(B, self.embedding_dim, 1)
-        b_final = self.hyper_b_final(s).view(B, 1, 1)
+        if self.use_attention:
+            # Apply attention mechanism
+            attn_output, _ = self.attention(hidden, hidden, hidden)  # (batch_size, 1, embed_dim)
+            q_tot = torch.bmm(attn_output, w_final) + b_final  # (batch_size, 1, 1)
+        else:
+            q_tot = torch.bmm(hidden, w_final) + b_final  # (batch_size, 1, 1)
 
-        q_tot = torch.bmm(hidden, w_final) + b_final # (B*T, 1, 1)
-        q_tot = q_tot.view(B, 1) # (B, 1)
+        q_tot = q_tot.view(batch_size, 1)  # (batch_size, 1)
         return q_tot
-
 from typing import Dict, Tuple
 
 import numpy as np
@@ -281,25 +271,21 @@ class QMIX:
         self.target_mixing_network = MixingNetwork(num_agents, state_shape=state_shape).to(device)
         
         # Get parameter groups
-        param_groups = []
-        
-        ps_groups = self.agent_q_network.get_params_groups()
-        # Add Swin parameters with small learning rate
-        # param_groups.append({
-        #     'params': ps_groups['swin'],
-        #     'lr': lr * 0.02  # 50x smaller learning rate for Swin
-        # })
-        
-        # Add other parameters with normal learning rate
- 
-                
-        param_groups.append({
-            'params': (
-                list(ps_groups['other']) +
-                list(self.mixing_network.parameters())
-            ),
-            'lr': lr
-        })
+        # Allow Swin parameters to be fine-tuned with a lower learning rate
+        param_groups = [
+            {
+                'params': list(self.agent_q_network.input_conv.parameters()) + 
+                        #   list(self.agent_q_network..parameters()) +
+                        #   list(self.agent_q_network.final_conv.parameters()) +
+                          list(self.agent_q_network.fc.parameters()) +
+                          list(self.mixing_network.parameters()),
+                'lr': lr
+            },
+            {
+                'params': list(self.agent_q_network.swin.parameters()),
+                'lr': lr * 0.1  # 10x smaller learning rate for Swin
+            }
+        ]
         # Compile networks for potential speed-up (PyTorch 2.0+)
         try:
             self.agent_q_network = torch.compile(self.agent_q_network)
@@ -330,6 +316,7 @@ class QMIX:
             self.optimizer, step_size=32, gamma=0.8
         )
 
+        self.loss_fn = nn.SmoothL1Loss().to(device)
         # Log models with wandb
         wandb.watch(self.agent_q_network, log_freq=100)
         wandb.watch(self.mixing_network, log_freq=100)
@@ -428,28 +415,30 @@ class QMIX:
                 chosen_q_values = q_values.gather(1, chosen_actions).squeeze(1)  # Shape: (sb_size * N)
                 chosen_q_values = chosen_q_values.view(sb_size, N_agents)  # Shape: (sb_size, N)
 
-                # Compute target Q-values
+               # Compute Double Q-learning targets
                 with torch.no_grad():
-                    target_q_values = self.target_agent_q_network(next_obs_sb_flat)  # Shape: (sb_size * N, num_actions)
-                    max_target_q_values, _ = target_q_values.max(dim=1)              # Shape: (sb_size * N)
-                    max_target_q_values = max_target_q_values.view(sb_size, N_agents)  # Shape: (sb_size, N)
+                    target_q_values = self.target_agent_q_network(next_obs_sb_flat)  # (sb_size*N, num_actions)
+                    _, max_actions = target_q_values.max(dim=1)  # (sb_size*N,)
+                    max_target_q_values = target_q_values.gather(1, max_actions.unsqueeze(1)).squeeze(1)  # (sb_size*N,)
+                    max_target_q_values = max_target_q_values.view(sb_size, N_agents)  # (B*T, N)
+
 
                 state_sb = state_sb.permute(0, 3, 1, 2).contiguous()  # Shape: (sb_size, C_s, H_s, W_s)
                 next_state_sb = next_state_sb.permute(0, 3, 1, 2).contiguous()
+
                 # Compute Q_tot and target Q_tot
+
                 q_tot = self.mixing_network(chosen_q_values, state_sb)  # Shape: (sb_size, 1)
+                q_tot = q_tot.squeeze(1)  # Shape: (sb_size,)
+
                 with torch.no_grad():
                     target_q_tot = self.target_mixing_network(max_target_q_values, next_state_sb)  # Shape: (sb_size, 1)
+                    # Compute targets
+                    target_q_tot = target_q_tot.squeeze(1)  # Shape: (sb_size,)
+                    targets = rewards_sb + self.gamma * (1 - dones_sb) * target_q_tot  # Shape: (sb_size, 1)
 
-                # Compute targets
-                # rewards_sum = rewards_sb.sum(dim=1, keepdim=True)              # Shape: (sb_size, 1)
-                # dones_max = dones_sb.float().max(dim=1, keepdim=True)[0]       # Shape: (sb_size, 1)
-                target_q_tot = target_q_tot.squeeze(1)  # Shape: (sb_size,)
-                targets = rewards_sb + self.gamma * (1 - dones_sb) * target_q_tot  # Shape: (sb_size, 1)
-
-                q_tot = q_tot.squeeze(1)  # Shape: (sb_size,)
                 # Compute loss
-                loss = nn.MSELoss()(q_tot, targets.detach())
+                loss = self.loss_fn(q_tot, targets.detach())
                 total_loss += loss.item()
 
                 # Backpropagation and optimization
@@ -468,7 +457,7 @@ class QMIX:
                 del obs_sb_flat, actions_sb_flat, next_obs_sb_flat
                 # torch.cuda.empty_cache()
         
-        if ep % 100 == 0:
+        if ep % 10 == 0:
             self.scheduler1.step()
         # Return the average loss over all sub-batches
         average_loss = total_loss / (B * num_sub_batches)
@@ -481,7 +470,7 @@ class QMIX:
         self.target_agent_q_network.load_state_dict(self.agent_q_network.state_dict())
         self.target_mixing_network.load_state_dict(self.mixing_network.state_dict())
 
-    def update_target_soft(self, tau: float = 0.6):
+    def update_target_soft(self, tau: float = 0.1):
         """
         Perform a soft update of target networks.
 
