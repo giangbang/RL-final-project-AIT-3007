@@ -363,15 +363,14 @@ class QMix_Trainer():
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
-
-                self.update_cnt += 1
-                if self.update_cnt % self.target_update_interval == 0:
-                    self._update_targets()
                 
                 current_loss = loss.item()
             
                 if epoch % 100 == 0:
                     print(f'Epoch {epoch}/{total_epoch+1}, Loss: {current_loss}')
+            self.update_cnt += 1
+            if self.update_cnt % self.target_update_interval == 0:
+                self._update_targets()
             total_epoch += 1
         # Decay epsilon after each update
         self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
