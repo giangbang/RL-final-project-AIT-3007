@@ -6,16 +6,16 @@ import torchvision.models as models
 from typing import List
 from torch.nn import functional as F
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
-torch.set_float32_matmul_precision('high')
+device = "cuda:0" if torch.cuda.is_available() else "cpu"
+torch.set_float32_matmul_precision('medium')
 
 
 class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, padding=1):
         super().__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=padding)
         self.bn1 = nn.BatchNorm2d(out_channels)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=padding)
         self.bn2 = nn.BatchNorm2d(out_channels)
         
         # Add skip connection if input and output channels differ
@@ -57,11 +57,12 @@ class AgentQNetwork(nn.Module):
             ResidualBlock(32, 64),
             ResidualBlock(64, 32),
             ResidualBlock(32, 16),
+            ResidualBlock(16, 8)
         )
         
         # Final convolution to match Swin input
         self.final_conv = nn.Sequential(
-            nn.Conv2d(16, 3, kernel_size=3, padding=1),
+            nn.Conv2d(8, 3, kernel_size=3, padding=1),
             nn.BatchNorm2d(3),
             nn.ReLU()
         )
@@ -74,8 +75,8 @@ class AgentQNetwork(nn.Module):
 
 
         # turn off gradients for the swin model
-        # for param in self.swin.parameters():
-        #     param.requires_grad = False
+        for param in self.swin.parameters():
+            param.requires_grad = False
         
         # Final fully connected layer
         self.fc = nn.Linear(1000, num_actions)
@@ -105,13 +106,8 @@ class AgentQNetwork(nn.Module):
 
 
     def forward(self, obs):
-        # obs shape: (batch, n_eps,  N_agents, 13,13,5)
-        # We'll reshape to feed each agent separately if needed
-        B, N, T, H, W, C = obs.shape
-        obs = obs.permute(0,1,2,5,3,4).contiguous() # (B, T, N, C, H, W)
-        obs = obs.view(-1, C, H, W).contiguous() # (B*T*N, C, H, W)
-        
         # Process through conv layers with residual connections
+        # B, C, H, W = obs.size()
         x = self.input_conv(obs)
         x = self.res_blocks(x)
         x = self.final_conv(x)
@@ -124,8 +120,8 @@ class AgentQNetwork(nn.Module):
         features = self.swin(x)
         
         # Final Q-values
-        q = self.fc(features)
-        q = q.view(B*T, N, -1).contiguous()  # (B, T, N, num_actions)
+        q = self.fc(features) # (B, num_actions)
+        # q = q.view(B, N, -1).contiguous()  # (B, T, N, num_actions)
         
         return q
     def get_params_groups(self):
@@ -157,14 +153,19 @@ class MixingNetwork(nn.Module):
 
         self.conv = nn.Sequential(
             ResidualBlock(5, 16),
+            nn.Conv2d(16, 16, kernel_size=3),
             ResidualBlock(16, 32),
+            nn.Conv2d(32, 32, kernel_size=3),
             ResidualBlock(32, 64),
+            nn.Conv2d(64, 64, kernel_size=3),
             ResidualBlock(64, 32),
+            nn.Conv2d(32, 32, kernel_size=3),
             ResidualBlock(32, 16),
+            nn.Conv2d(16, 16, kernel_size=3),
             nn.AdaptiveAvgPool2d((1,1))
         )
         # After pooling: 16 dims  
-        self.state_dim = 32 
+        self.state_dim = 16 
         self.num_agents = num_agents
         self.embedding_dim = embed_dim
         # Layers for hypernetwork
@@ -220,26 +221,26 @@ class MixingNetwork(nn.Module):
                     nn.init.zeros_(m.bias)
 
     def forward(self, agent_qs, state):
-        # agent_qs: (B,T, N)
-        # state: (B, T, H, W, C)
-        B, T, H, W, C = state.size()
+        # agent_qs: (B, N)
+        # state: (B, H, W, C)
+        B, C, H, W = state.size()
 
-        # Encode state
-        state = state.permute(0,1,4,2,3).contiguous().float() # (B,T, C, H, W)
-        state = state.view(-1, 5, 45, 45).contiguous() # (B*T, C, H, W)
-        # agent_qs = agent_qs.view(B*T, N).contiguous() # (B*T, N)
+        # # Encode state
+        # state = state.permute(0,1,4,2,3).contiguous().float() # (B,T, C, H, W)
+        # state = state.view(-1, 5, 45, 45).contiguous() # (B*T, C, H, W)
+        # # agent_qs = agent_qs.view(B*T, N).contiguous() # (B*T, N)
         s = self.conv(state)
-        s = s.view(B*T, -1) # (B, 32)
+        s = s.view(B, -1) # (B, 32)
 
-        w1 = torch.abs(self.hyper_w_1(s)).view(B*T, self.num_agents, self.embedding_dim) # ensure non-negativity if needed
-        b1 = self.hyper_b_1(s).view(B*T, 1, self.embedding_dim)
+        w1 = torch.abs(self.hyper_w_1(s)).view(B, self.num_agents, self.embedding_dim) # ensure non-negativity if needed
+        b1 = self.hyper_b_1(s).view(B, 1, self.embedding_dim)
         hidden = torch.relu(torch.bmm(agent_qs.unsqueeze(1), w1) + b1) # (B*T, 1, embed_dim)
 
-        w_final = torch.abs(self.hyper_w_final(s)).view(B*T, self.embedding_dim, 1)
-        b_final = self.hyper_b_final(s).view(B*T, 1, 1)
+        w_final = torch.abs(self.hyper_w_final(s)).view(B, self.embedding_dim, 1)
+        b_final = self.hyper_b_final(s).view(B, 1, 1)
 
         q_tot = torch.bmm(hidden, w_final) + b_final # (B*T, 1, 1)
-        q_tot = q_tot.view(B*T, 1) # (B, T, 1)
+        q_tot = q_tot.view(B, 1) # (B, 1)
         return q_tot
 
 from typing import Dict, Tuple
@@ -264,11 +265,13 @@ class QMIX:
         num_actions: int = 21,
         lr: float = 1e-3,
         gamma: float = 0.99,
+        sub_batch_size: int = 64,
     ):
         self.num_agents = num_agents
         self.gamma = gamma
         self.agent_ids = agent_ids
         self.device = device
+        self.sub_batch_size = sub_batch_size
 
 
         # Initialize networks
@@ -282,10 +285,10 @@ class QMIX:
         
         ps_groups = self.agent_q_network.get_params_groups()
         # Add Swin parameters with small learning rate
-        param_groups.append({
-            'params': ps_groups['swin'],
-            'lr': lr * 0.02  # 50x smaller learning rate for Swin
-        })
+        # param_groups.append({
+        #     'params': ps_groups['swin'],
+        #     'lr': lr * 0.02  # 50x smaller learning rate for Swin
+        # })
         
         # Add other parameters with normal learning rate
  
@@ -305,11 +308,12 @@ class QMIX:
             self.target_mixing_network = torch.compile(self.target_mixing_network)
         except Exception as e:
             print(f"Compilation failed: {e}. Using regular execution.")
-            # If torch.compile fails (e.g., not using PyTorch 2.0), proceed without compiling
-        # torch.nn.DataParallel(self.agent_q_network)
-        # torch.nn.DataParallel(self.mixing_network)
-        # torch.nn.DataParallel(self.target_agent_q_network)
-        # torch.nn.DataParallel(self.target_mixing_network)
+        # If torch.compile fails (e.g., not using PyTorch 2.0), proceed without compiling
+
+        # self.agent_q_network = torch.nn.DataParallel(self.agent_q_network)
+        # self.mixing_network = torch.nn.DataParallel(self.mixing_network)
+        # self.target_agent_q_network = torch.nn.DataParallel(self.target_agent_q_network)
+        # self.target_mixing_network = torch.nn.DataParallel(self.target_mixing_network)
         # Synchronize target networks with main networks
         self.update_target_hard()
 
@@ -321,6 +325,9 @@ class QMIX:
         )
         self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
             self.optimizer, T_0=20, T_mult=2, eta_min=1e-6,
+        )
+        self.scheduler1 = optim.lr_scheduler.StepLR(
+            self.optimizer, step_size=32, gamma=0.8
         )
 
         # Log models with wandb
@@ -339,7 +346,10 @@ class QMIX:
             Dict[str, int]: Mapping from agent IDs to selected actions.
         """
         # Add batch dimension
-        obs = obs.unsqueeze(0).unsqueeze(1).to(self.device)  # Shape: (1, 1, N_agents, C, H, W)
+
+        N, H, W, C = obs.shape
+        obs = obs.view(N,C,H,W).contiguous()
+        obs = obs.to(self.device)  # Shape: (1, 1, N_agents, C, H, W)
         with torch.no_grad():
             q_values = self.agent_q_network(obs)  # Shape: (1, 1, N_agents, num_actions)
         q_values = q_values.squeeze(0).squeeze(1)  # Shape: (N_agents, num_actions)
@@ -350,11 +360,16 @@ class QMIX:
             if np.random.rand() < epsilon:
                 action = np.random.randint(q_values.shape[1])
             else:
-                action = np.argmax(q_values[i])
+                action = np.argmax(q_values[i]).astype(np.uint16)
             actions[agent] = action
         return actions
+    
+    def update(self, batch: Dict[str, np.ndarray], ep: int) -> float:
+        self.agent_q_network.train()
+        self.mixing_network.train()
+        self.target_agent_q_network.eval()
+        self.target_mixing_network.eval()
 
-    def update(self, batch: Dict[str, np.ndarray]) -> float:
         """
         Update the QMIX networks based on a batch of experiences.
 
@@ -364,45 +379,100 @@ class QMIX:
         Returns:
             float: The computed loss value.
         """
-        # Convert batch data to tensors
-        obs = torch.tensor(batch['obs'], dtype=torch.float32).to(self.device)            # (B, T, N, H, W, C)
-        actions = torch.tensor(batch['actions'], dtype=torch.long).to(self.device)        # (B, T, N)
-        rewards = torch.tensor(batch['rewards'], dtype=torch.float32).to(self.device)     # (B, T, N)
-        next_obs = torch.tensor(batch['next_obs'], dtype=torch.float32).to(self.device)   # (B, T, N, H, W, C)
-        state = torch.tensor(batch['state'], dtype=torch.float32).to(self.device)         # (B, T, H_s, W_s, C_s)
-        next_state = torch.tensor(batch['next_state'], dtype=torch.float32).to(self.device)  # Same shape as state
-        dones = torch.tensor(batch['dones'], dtype=torch.float32).to(self.device)         # (B, T, N)
 
+        # Convert batch data to tensors on CPU initially
+        obs = torch.tensor(batch['obs'], dtype=torch.float32)            # (B, T, N, H, W, C)
+        actions = torch.tensor(batch['actions'], dtype=torch.int64)        # (B, T, N)
+        rewards = torch.tensor(batch['rewards'], dtype=torch.float32)     # (B, T,)
+        next_obs = torch.tensor(batch['next_obs'], dtype=torch.float32)   # (B, T, N, H, W, C)
+        state = torch.tensor(batch['state'], dtype=torch.float32)         # (B, T, H_s, W_s, C_s)
+        next_state = torch.tensor(batch['next_state'], dtype=torch.float32)  # Same shape as state
+        dones = torch.tensor(batch['dones'], dtype=torch.int64)            # (B, T,)
 
-        # Current Q-values
-        q_values = self.agent_q_network(obs)  # Shape: (B, T, N, num_actions)
-        actions = actions.unsqueeze(-1).expand(-1, -1, q_values.size(-1))  # Shape: (B, N, num_actions)
-        chosen_q = torch.gather(q_values, dim=2, index=actions).squeeze(-1)  # Shape: (B, N)
+        B, T = obs.shape[0], obs.shape[1]
 
-        # Target Q-values
-        with torch.no_grad():
-            target_q_values = self.target_agent_q_network(next_obs)  # Shape: (B, N, num_actions)
-            max_actions = torch.argmax(target_q_values, dim=2, keepdim=True)  # Shape: (B, N, 1)
-            max_q = torch.gather(target_q_values, 2, max_actions).squeeze(-1)  # Shape: (B, N)
+        # Determine the number of sub-batches
+        sub_batch_size = self.sub_batch_size
+        num_sub_batches = (T + sub_batch_size - 1) // sub_batch_size  # Ceiling division
 
-        # Compute Q_tot and target Q_tot
-        q_tot = self.mixing_network(chosen_q, state)  # Shape: (B, 1)
-        target_q_tot = self.target_mixing_network(max_q, next_state)  # Shape: (B, 1)
-        target = rewards.unsqueeze(1) + self.gamma * (1 - dones.unsqueeze(1)) * target_q_tot  # Shape: (B, 1)
+        total_loss = 0.0
 
-        # Compute loss
-        loss = nn.MSELoss()(q_tot, target.detach())
+        for i in range(B):
+            # Process each episode individually
+            for sb in range(num_sub_batches):
+                start = sb * sub_batch_size
+                end = min((sb + 1) * sub_batch_size, T)
 
-        # Backpropagation
-        self.optimizer.zero_grad()
-        loss.backward()
-        # Gradient clipping
-        nn.utils.clip_grad_norm_(self.agent_q_network.parameters(), max_norm=1.0)
-        nn.utils.clip_grad_norm_(self.mixing_network.parameters(), max_norm=1.0)
-        self.optimizer.step()
-        self.scheduler.step()
+                # Extract sub-batch for the current episode
+                obs_sb = obs[i, start:end].to(self.device)             # Shape: (sb_size, N, H, W, C)
+                actions_sb = actions[i, start:end].to(self.device)      # Shape: (sb_size, N)
+                rewards_sb = rewards[i, start:end].to(self.device)      # Shape: (sb_size,)
+                next_obs_sb = next_obs[i, start:end].to(self.device)    # Shape: (sb_size, N, H, W, C)
+                state_sb = state[i, start:end].to(self.device)          # Shape: (sb_size, H_s, W_s, C_s)
+                next_state_sb = next_state[i, start:end].to(self.device)  # Shape: (sb_size, H_s, W_s, C_s)
+                dones_sb = dones[i, start:end].to(self.device)          # Shape: (sb_size,)
 
-        return loss.item()
+                # Permute dimensions if necessary (e.g., from (sb_size, N, H, W, C) to (sb_size, N, C, H, W))
+                obs_sb = obs_sb.permute(0, 1, 4, 2, 3).contiguous()        # Shape: (sb_size, N, C, H, W)
+                next_obs_sb = next_obs_sb.permute(0, 1, 4, 2, 3).contiguous()
+
+                # Flatten batch and agent dimensions for processing
+                sb_size, N_agents = obs_sb.shape[0], obs_sb.shape[1]
+                obs_sb_flat = obs_sb.view(-1, *obs_sb.shape[2:]).contiguous()          # Shape: (sb_size * N, C, H, W)
+                actions_sb_flat = actions_sb.view(-1).contiguous()                     # Shape: (sb_size * N)
+                next_obs_sb_flat = next_obs_sb.view(-1, *next_obs_sb.shape[2:]).contiguous()  # Shape: (sb_size * N, C, H, W)
+
+                # Compute current Q-values
+                q_values = self.agent_q_network(obs_sb_flat)              # Shape: (sb_size * N, num_actions)
+                chosen_actions = actions_sb_flat.unsqueeze(1)             # Shape: (sb_size * N, 1)
+                chosen_q_values = q_values.gather(1, chosen_actions).squeeze(1)  # Shape: (sb_size * N)
+                chosen_q_values = chosen_q_values.view(sb_size, N_agents)  # Shape: (sb_size, N)
+
+                # Compute target Q-values
+                with torch.no_grad():
+                    target_q_values = self.target_agent_q_network(next_obs_sb_flat)  # Shape: (sb_size * N, num_actions)
+                    max_target_q_values, _ = target_q_values.max(dim=1)              # Shape: (sb_size * N)
+                    max_target_q_values = max_target_q_values.view(sb_size, N_agents)  # Shape: (sb_size, N)
+
+                state_sb = state_sb.permute(0, 3, 1, 2).contiguous()  # Shape: (sb_size, C_s, H_s, W_s)
+                next_state_sb = next_state_sb.permute(0, 3, 1, 2).contiguous()
+                # Compute Q_tot and target Q_tot
+                q_tot = self.mixing_network(chosen_q_values, state_sb)  # Shape: (sb_size, 1)
+                with torch.no_grad():
+                    target_q_tot = self.target_mixing_network(max_target_q_values, next_state_sb)  # Shape: (sb_size, 1)
+
+                # Compute targets
+                # rewards_sum = rewards_sb.sum(dim=1, keepdim=True)              # Shape: (sb_size, 1)
+                # dones_max = dones_sb.float().max(dim=1, keepdim=True)[0]       # Shape: (sb_size, 1)
+                target_q_tot = target_q_tot.squeeze(1)  # Shape: (sb_size,)
+                targets = rewards_sb + self.gamma * (1 - dones_sb) * target_q_tot  # Shape: (sb_size, 1)
+
+                q_tot = q_tot.squeeze(1)  # Shape: (sb_size,)
+                # Compute loss
+                loss = nn.MSELoss()(q_tot, targets.detach())
+                total_loss += loss.item()
+
+                # Backpropagation and optimization
+                self.optimizer.zero_grad()
+                loss.backward()
+
+                # Gradient clipping
+                nn.utils.clip_grad_norm_(self.agent_q_network.parameters(), max_norm=1.0)
+                nn.utils.clip_grad_norm_(self.mixing_network.parameters(), max_norm=1.0)
+
+                self.optimizer.step()
+                self.scheduler.step()
+
+                # Free up GPU memory
+                del obs_sb, actions_sb, rewards_sb, next_obs_sb, state_sb, next_state_sb, dones_sb
+                del obs_sb_flat, actions_sb_flat, next_obs_sb_flat
+                # torch.cuda.empty_cache()
+        
+        if ep % 100 == 0:
+            self.scheduler1.step()
+        # Return the average loss over all sub-batches
+        average_loss = total_loss / (B * num_sub_batches)
+        return average_loss
 
     def update_target_hard(self):
         """
@@ -411,7 +481,7 @@ class QMIX:
         self.target_agent_q_network.load_state_dict(self.agent_q_network.state_dict())
         self.target_mixing_network.load_state_dict(self.mixing_network.state_dict())
 
-    def update_target_soft(self, tau: float = 0.4):
+    def update_target_soft(self, tau: float = 0.6):
         """
         Perform a soft update of target networks.
 
