@@ -44,30 +44,73 @@ def preprocess_state(state, device):
 
 def train(env, q_network, target_network, optimizer, replay_buffer, device, config):
     start_time = time.time()
-    time_limit = 7200  # 2 hours in seconds
+    time_limit = 7200  # 2 hours
+    epsilon = config['epsilon_start']
+    step_count = 0
+    best_reward = float('-inf')
+    rewards_history = []
     
     for episode in range(config['num_episodes']):
-        # Check time limit
         if time.time() - start_time > time_limit:
             print(f"Time limit of 2 hours reached")
             torch.save(q_network.state_dict(), "blue_final.pt")
-            print("Training stopped. Model saved as 'blue_final.pt'")
             return
             
-        # Training loop
         env.reset()
-        episode_reward = 0
-        done = False
+        total_reward = 0
+        done = {agent: False for agent in env.agents}
+
+        while not all(done.values()):
+            for agent in env.agent_iter():
+                obs, reward, termination, truncation, _ = env.last()
+                agent_team = agent.split("_")[0]
+
+                if termination or truncation:
+                    action = None
+                    done[agent] = True
+                else:
+                    if agent_team == "blue":
+                        action = select_action(obs, epsilon)
+                        next_obs = env.observe(agent)
+                        replay_buffer.add(obs, action, reward, next_obs, termination or truncation)
+                        step_count += 1
+                        total_reward += reward
+                        
+                        if step_count % config['train_freq'] == 0:
+                            optimize_model()
+                    else:
+                        action = red_final_policy(obs)
+
+                env.step(action)
+
+        # Update epsilon
+        epsilon = max(config['epsilon_end'], epsilon * config['epsilon_decay'])
         
-        while not done:
-            ...existing code...
+        # Update target network
+        if step_count % config['target_update_freq'] == 0:
+            target_network.load_state_dict(q_network.state_dict())
             
-        # Logging with time
+        # Track best model
+        if total_reward > best_reward:
+            best_reward = total_reward
+            torch.save(q_network.state_dict(), "blue_best.pt")
+            
+        rewards_history.append(total_reward)
+        
+        # Logging
         if episode % 10 == 0:
             elapsed_time = time.time() - start_time
-            print(f"Episode {episode}, Time: {elapsed_time/3600:.1f}h")
-            print(f"Reward: {episode_reward:.2f}")
+            avg_reward = np.mean(rewards_history[-10:])
+            print(f"Episode {episode}/{config['num_episodes']}")
+            print(f"Time: {elapsed_time/3600:.1f}h")
+            print(f"Avg Reward: {avg_reward:.2f}")
+            print(f"Epsilon: {epsilon:.4f}")
+            print(f"Buffer size: {len(replay_buffer)}")
             print("-" * 50)
+            
+        # Save checkpoint
+        if (episode + 1) % 100 == 0:
+            torch.save(q_network.state_dict(), f"blue_checkpoint_{episode+1}.pt")
 
 def main():
     # Initialize environment and devices
