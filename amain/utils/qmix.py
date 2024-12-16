@@ -296,9 +296,6 @@ class QMIX:
         self.target_agent_q_network = AgentQNetwork(num_actions=num_actions).to(device)
         self.target_mixing_network = MixingNetwork(num_agents, state_shape=state_shape).to(device)
         
-        # Get parameter groups
-        # Allow Swin parameters to be fine-tuned with a lower learning rate
-
         # Compile networks for potential speed-up (PyTorch 2.0+)
         try:
             self.agent_q_network = torch.compile(self.agent_q_network)
@@ -309,14 +306,7 @@ class QMIX:
             print(f"Compilation failed: {e}. Using regular execution.")
         # # If torch.compile fails (e.g., not using PyTorch 2.0), proceed without compiling
   
-        # self.agent_q_network = nn.DataParallel(self.agent_q_network)
-        # self.mixing_network = nn.DataParallel(self.mixing_network)
-        # self.target_agent_q_network = nn.DataParallel(self.target_agent_q_network)
-        # self.target_mixing_network = nn.DataParallel(self.target_mixing_network)
-
-
         self.update_target_hard()
-        
         
         # Optimizer and scheduler
         self.optimizer = optim.AdamW(
@@ -351,7 +341,7 @@ class QMIX:
 
         N, H, W, C = obs.shape
         obs = obs.view(N,C,H,W).contiguous()
-        obs = obs.to(self.device)  # Shape: (1, 1, N_agents, C, H, W)
+        obs = obs.float().to(self.device)  # Shape: (1, 1, N_agents, C, H, W)
         with torch.no_grad():
             q_values = self.agent_q_network(obs)  # Shape: (1, 1, N_agents, num_actions)
         q_values = q_values.squeeze(0).squeeze(1)  # Shape: (N_agents, num_actions)
@@ -431,6 +421,9 @@ class QMIX:
                 chosen_q_values = q_values.gather(1, chosen_actions).squeeze(1)  # Shape: (sb_size * N)
                 chosen_q_values = chosen_q_values.view(sb_size, N_agents)  # Shape: (sb_size, N)
 
+                # entropy regularization
+                entropy = -torch.sum(F.softmax(q_values, dim=1) * F.log_softmax(q_values, dim=1), dim=1).mean() # (sb_size * N)
+
                # Compute Double Q-learning targets
                 with torch.no_grad():
                     target_q_values = self.target_agent_q_network(next_obs_sb_flat)  # (sb_size*N, num_actions)
@@ -454,7 +447,7 @@ class QMIX:
                     targets = rewards_sb + self.gamma * (1 - dones_sb) * target_q_tot  # Shape: (sb_size, 1)
 
                 # Compute loss
-                loss = self.loss_fn(q_tot, targets.detach())
+                loss = self.loss_fn(q_tot, targets.detach()) - 0.01 * entropy
                 total_loss += loss.item()
                 loss_prio += loss.item()
                 # Backpropagation and optimization
