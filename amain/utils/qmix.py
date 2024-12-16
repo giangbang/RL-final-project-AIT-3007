@@ -9,101 +9,88 @@ from torch.nn import functional as F
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
 torch.set_float32_matmul_precision('medium')
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torchvision.models as models
-
 class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, padding=1):
+    def __init__(self, in_channels, out_channels, stride=1):
         super().__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=padding)
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3,
+                               stride=stride, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(out_channels)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=padding)
+        self.leaky_relu = nn.LeakyReLU(0.1, inplace=True)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3,
+                               stride=1, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(out_channels)
-        
-        # Add skip connection if input and output channels differ
-        self.skip = nn.Sequential()
-        if in_channels != out_channels:
-            self.skip = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
+
+        # Automatically create downsample layer if needed
+        if stride != 1 or in_channels != out_channels:
+            self.downsample = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1,
+                          stride=stride, bias=False),
                 nn.BatchNorm2d(out_channels)
             )
+        else:
+            self.downsample = None
 
     def forward(self, x):
-        residual = self.skip(x)
+        identity = x
+
         out = self.conv1(x)
         out = self.bn1(out)
-        out = F.relu(out)
+        out = self.leaky_relu(out)
+
         out = self.conv2(out)
         out = self.bn2(out)
-        out += residual
-        out = F.relu(out)
+
+        if self.downsample is not None:
+            identity = self.downsample(x)
+
+        out += identity
+        out = self.leaky_relu(out)
+
         return out
 
 class AgentQNetwork(nn.Module):
     """
-    Simplified Q-Network for agents with optional Swin Transformer.
+    Custom Q-Network for RL Agents without Pretrained Weights.
     """
-    def __init__(self, num_actions=21, use_swin=True):
+    def __init__(self, num_actions=21, input_channels=5):
         super().__init__()
         
         # Initial convolution layers
         self.input_conv = nn.Sequential(
-            nn.Conv2d(5, 32, kernel_size=3, padding=1),
+            nn.Conv2d(input_channels, 32, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(32),
-            nn.ReLU(),
+            nn.LeakyReLU(0.1, inplace=True),
             ResidualBlock(32, 64),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            nn.Conv2d(64, 16, kernel_size=3, padding=1, dilation=2),
-            nn.BatchNorm2d(16),
-            nn.ReLU(),
-            nn.Conv2d(16, 3, kernel_size=3, padding=1, dilation=2),
+            ResidualBlock(64, 64),
+            ResidualBlock(64, 128, stride=2),  # Downsample
+            ResidualBlock(128, 128),
+            ResidualBlock(128, 256, stride=2),  # Downsample
+            ResidualBlock(256, 256),
+            ResidualBlock(256, 512, stride=2),  # Downsample
         )
         
-        # Optional Swin Transformer
-        self.use_swin = use_swin
-        if self.use_swin:
-            self.swin = models.efficientnet_b0(weights='IMAGENET1K_V1')
-            # Allow fine-tuning with a smaller learning rate
-            for param in self.swin.parameters():
-                param.requires_grad = False 
-            
-            # Modify Swin to output desired feature size
-            self.swin.head = nn.Identity()
-            swin_output_dim = 1000 # Swin-T base output dimension
-        else:
-            # If not using Swin, add additional convolutional layers
-            self.additional_conv = nn.Sequential(
-                ResidualBlock(64, 128),
-                nn.BatchNorm2d(128),
-                nn.ReLU(),
-                nn.AdaptiveAvgPool2d((1,1))
-            )
-            swin_output_dim = 128
+        # Calculate the flattened feature size
+        # Assuming input image size is (C, H, W) = (5, 45, 45)
+        # After two downsampling layers with stride=2: H and W become 11 (45/2 -> 22, then 11)
+        self.feature_dim = 512 * 2 * 2  # Adjust based on actual input size
         
-        # Final fully connected layer
-        self.fc = nn.Linear(swin_output_dim, num_actions)
+        # Fully connected layers
+        self.fc = nn.Sequential(
+            nn.Linear(self.feature_dim, 512),
+            nn.LeakyReLU(0.1, inplace=True),
+            nn.Linear(512, num_actions)
+        )
         
-        self._initialize_weights()
-
-    def _initialize_weights(self):
+        # Initialize weights
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                # Kaiming Initialization
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='leaky_relu')
             elif isinstance(m, nn.BatchNorm2d):
-                # BatchNorm initialization
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.Linear):
-                # Linear layer initialization
-                nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
+                nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='leaky_relu')
+                nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
         """
@@ -115,24 +102,16 @@ class AgentQNetwork(nn.Module):
         Returns:
             torch.Tensor: Q-values for each action with shape (batch_size, num_actions).
         """
-        x = self.input_conv(x)  # Shape: (batch_size, 64, H, W)
-        
-        if self.use_swin:
-            x = F.interpolate(x, size=(224, 224), mode='bilinear', align_corners=False)
-            features = self.swin(x)  # Shape: (batch_size, 768)
-        else:
-            x = self.additional_conv(x)  # Shape: (batch_size, 128, 1, 1)
-            features = x.view(x.size(0), -1)  # Shape: (batch_size, 128)
-        
-        q_values = self.fc(features)  # Shape: (batch_size, num_actions)
+        x = self.input_conv(x)  # Shape: (batch_size, 256, 11, 11)
+        x = x.view(x.size(0), -1)  # Shape: (batch_size, 256*11*11)
+        q_values = self.fc(x)  # Shape: (batch_size, num_actions)
         return q_values
-
-
+    
 # -------------------------
 # Mixing Network
 # -------------------------
 class MixingNetwork(nn.Module):
-    def __init__(self, num_agents, state_shape=(45,45,5), embed_dim=32, use_attention=True):
+    def __init__(self, num_agents, state_shape=(45,45,5), embed_dim=64, use_attention=True):
         """
         Mixing network for QMIX with optional attention mechanism.
         
@@ -272,20 +251,7 @@ class QMIX:
         
         # Get parameter groups
         # Allow Swin parameters to be fine-tuned with a lower learning rate
-        param_groups = [
-            {
-                'params': list(self.agent_q_network.input_conv.parameters()) + 
-                        #   list(self.agent_q_network..parameters()) +
-                        #   list(self.agent_q_network.final_conv.parameters()) +
-                          list(self.agent_q_network.fc.parameters()) +
-                          list(self.mixing_network.parameters()),
-                'lr': lr
-            },
-            {
-                'params': list(self.agent_q_network.swin.parameters()),
-                'lr': lr * 0.1  # 10x smaller learning rate for Swin
-            }
-        ]
+
         # Compile networks for potential speed-up (PyTorch 2.0+)
         try:
             self.agent_q_network = torch.compile(self.agent_q_network)
@@ -295,17 +261,19 @@ class QMIX:
         except Exception as e:
             print(f"Compilation failed: {e}. Using regular execution.")
         # If torch.compile fails (e.g., not using PyTorch 2.0), proceed without compiling
+  
+        # self.agent_q_network = nn.DataParallel(self.agent_q_network)
+        # self.mixing_network = nn.DataParallel(self.mixing_network)
+        # self.target_agent_q_network = nn.DataParallel(self.target_agent_q_network)
+        # self.target_mixing_network = nn.DataParallel(self.target_mixing_network)
 
-        # self.agent_q_network = torch.nn.DataParallel(self.agent_q_network)
-        # self.mixing_network = torch.nn.DataParallel(self.mixing_network)
-        # self.target_agent_q_network = torch.nn.DataParallel(self.target_agent_q_network)
-        # self.target_mixing_network = torch.nn.DataParallel(self.target_mixing_network)
-        # Synchronize target networks with main networks
+
         self.update_target_hard()
-
+        
+        
         # Optimizer and scheduler
         self.optimizer = optim.AdamW(
-            params=param_groups,
+            params=list(self.agent_q_network.parameters()) + list(self.mixing_network.parameters()),
             lr=lr,
             weight_decay=1e-4,
         )
@@ -313,7 +281,7 @@ class QMIX:
             self.optimizer, T_0=20, T_mult=2, eta_min=1e-6,
         )
         self.scheduler1 = optim.lr_scheduler.StepLR(
-            self.optimizer, step_size=32, gamma=0.8
+            self.optimizer, step_size=10, gamma=0.8
         )
 
         self.loss_fn = nn.SmoothL1Loss().to(device)
@@ -425,7 +393,7 @@ class QMIX:
 
                 state_sb = state_sb.permute(0, 3, 1, 2).contiguous()  # Shape: (sb_size, C_s, H_s, W_s)
                 next_state_sb = next_state_sb.permute(0, 3, 1, 2).contiguous()
-
+                
                 # Compute Q_tot and target Q_tot
 
                 q_tot = self.mixing_network(chosen_q_values, state_sb)  # Shape: (sb_size, 1)
@@ -442,7 +410,7 @@ class QMIX:
                 total_loss += loss.item()
 
                 # Backpropagation and optimization
-                self.optimizer.zero_grad()
+                # self.optimizer.zero_grad()
                 loss.backward()
 
                 # Gradient clipping
@@ -451,14 +419,15 @@ class QMIX:
 
                 self.optimizer.step()
                 self.scheduler.step()
+                self.optimizer.zero_grad(set_to_none=True)
+
 
                 # Free up GPU memory
                 del obs_sb, actions_sb, rewards_sb, next_obs_sb, state_sb, next_state_sb, dones_sb
                 del obs_sb_flat, actions_sb_flat, next_obs_sb_flat
                 # torch.cuda.empty_cache()
         
-        if ep % 10 == 0:
-            self.scheduler1.step()
+        self.scheduler1.step()
         # Return the average loss over all sub-batches
         average_loss = total_loss / (B * num_sub_batches)
         return average_loss
