@@ -165,10 +165,10 @@ def train(config):
                 loss_red = qmix_red.update(batch_red,ep)
 
                 wandb.log({
-                        "loss_blue": loss_blue.item(),
-                        "loss_red": loss_red.item(),
+                        "loss_blue": loss_blue,
+                        "loss_red": loss_red,
                         "epsilon": epsilon,
-                        "loss" : loss_blue.item() + loss_red.item()
+                        "loss" : loss_blue + loss_red
                     })
                 if count % update_step == 0:
                     qmix_blue.update_target_soft()
