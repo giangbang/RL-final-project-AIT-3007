@@ -6,7 +6,7 @@ import torchvision.models as models
 from typing import List
 from torch.nn import functional as F
 
-device = "cuda:0" if torch.cuda.is_available() else "cpu"
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 torch.set_float32_matmul_precision('medium')
 
 class ResidualBlock(nn.Module):
@@ -48,6 +48,38 @@ class ResidualBlock(nn.Module):
 
         return out
 
+class ResidualFCBlock(nn.Module):
+    def __init__(self, in_features, out_features, dropout=0.1):
+        super(ResidualFCBlock, self).__init__()
+        self.fc1 = nn.Linear(in_features, out_features)
+        self.leaky_relu = nn.LeakyReLU(0.1, inplace=True)
+        self.dropout = nn.Dropout(dropout)
+        self.fc2 = nn.Linear(out_features, out_features)
+        
+        if in_features != out_features:
+            self.residual = nn.Sequential(
+                nn.Linear(in_features, out_features),
+                nn.Dropout(dropout)
+            )
+        else:
+            self.residual = nn.Identity()
+        
+        # Initialization
+        nn.init.kaiming_normal_(self.fc1.weight, mode='fan_in', nonlinearity='leaky_relu')
+        nn.init.constant_(self.fc1.bias, 0)
+        nn.init.kaiming_normal_(self.fc2.weight, mode='fan_in', nonlinearity='leaky_relu')
+        nn.init.constant_(self.fc2.bias, 0)
+
+    def forward(self, x):
+        residual = self.residual(x)
+        out = self.fc1(x)
+        out = self.leaky_relu(out)
+        out = self.dropout(out)
+        out = self.fc2(out)
+        out += residual
+        out = self.leaky_relu(out)
+        return out
+
 class AgentQNetwork(nn.Module):
     """
     Custom Q-Network for RL Agents without Pretrained Weights.
@@ -74,12 +106,16 @@ class AgentQNetwork(nn.Module):
         # After two downsampling layers with stride=2: H and W become 11 (45/2 -> 22, then 11)
         self.feature_dim = 512 * 2 * 2  # Adjust based on actual input size
         
-        # Fully connected layers
         self.fc = nn.Sequential(
-            nn.Linear(self.feature_dim, 512),
-            nn.LeakyReLU(0.1, inplace=True),
-            nn.Linear(512, num_actions)
+            ResidualFCBlock(self.feature_dim, 512),
+            ResidualFCBlock(512, 256),
+            ResidualFCBlock(256, 128),
+            nn.Linear(128, num_actions)
         )
+        
+        # Initialization for the final layer
+        nn.init.kaiming_normal_(self.fc[-1].weight, mode='fan_in', nonlinearity='linear')
+        nn.init.constant_(self.fc[-1].bias, 0)
         
         # Initialize weights
         for m in self.modules():
@@ -111,7 +147,7 @@ class AgentQNetwork(nn.Module):
 # Mixing Network
 # -------------------------
 class MixingNetwork(nn.Module):
-    def __init__(self, num_agents, state_shape=(45,45,5), embed_dim=64, use_attention=True):
+    def __init__(self, num_agents, state_shape=(45,45,5), embed_dim=256, use_attention=True):
         """
         Mixing network for QMIX with optional attention mechanism.
         
@@ -134,9 +170,21 @@ class MixingNetwork(nn.Module):
             ResidualBlock(32, 64),
             nn.BatchNorm2d(64),
             nn.ReLU(),
+            ResidualBlock(64, 64),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            ResidualBlock(64, 128, stride=2),  # Downsample
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            ResidualBlock(128, 128),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            ResidualBlock(128, 256, stride=2),  # Downsample
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
             nn.AdaptiveAvgPool2d((1,1))  # Output: (batch_size, 64, 1, 1)
         )
-        self.state_dim = 64
+        self.state_dim = 256
 
         # Hypernetworks for weights
         self.hyper_w_1 = nn.Sequential(
@@ -242,7 +290,6 @@ class QMIX:
         self.device = device
         self.sub_batch_size = sub_batch_size
 
-
         # Initialize networks
         self.agent_q_network = AgentQNetwork(num_actions=num_actions).to(device)
         self.mixing_network = MixingNetwork(num_agents, state_shape=state_shape).to(device)
@@ -260,7 +307,7 @@ class QMIX:
             self.target_mixing_network = torch.compile(self.target_mixing_network)
         except Exception as e:
             print(f"Compilation failed: {e}. Using regular execution.")
-        # If torch.compile fails (e.g., not using PyTorch 2.0), proceed without compiling
+        # # If torch.compile fails (e.g., not using PyTorch 2.0), proceed without compiling
   
         # self.agent_q_network = nn.DataParallel(self.agent_q_network)
         # self.mixing_network = nn.DataParallel(self.mixing_network)
@@ -351,9 +398,10 @@ class QMIX:
         num_sub_batches = (T + sub_batch_size - 1) // sub_batch_size  # Ceiling division
 
         total_loss = 0.0
-
+        priorities = []
         for i in range(B):
             # Process each episode individually
+            loss_prio = 0
             for sb in range(num_sub_batches):
                 start = sb * sub_batch_size
                 end = min((sb + 1) * sub_batch_size, T)
@@ -408,7 +456,7 @@ class QMIX:
                 # Compute loss
                 loss = self.loss_fn(q_tot, targets.detach())
                 total_loss += loss.item()
-
+                loss_prio += loss.item()
                 # Backpropagation and optimization
                 # self.optimizer.zero_grad()
                 loss.backward()
@@ -426,11 +474,11 @@ class QMIX:
                 del obs_sb, actions_sb, rewards_sb, next_obs_sb, state_sb, next_state_sb, dones_sb
                 del obs_sb_flat, actions_sb_flat, next_obs_sb_flat
                 # torch.cuda.empty_cache()
-        
+            priorities.append(loss_prio)
         self.scheduler1.step()
         # Return the average loss over all sub-batches
         average_loss = total_loss / (B * num_sub_batches)
-        return average_loss
+        return average_loss, priorities
 
     def update_target_hard(self):
         """
