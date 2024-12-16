@@ -370,8 +370,8 @@ class QMix_Trainer():
                 
                 current_loss = loss.item()
             
-                if epoch % 100:
-                    print(f'Epoch {epoch}/{total_epoch}, Loss: {current_loss}')
+                if epoch % 100 == 0:
+                    print(f'Epoch {epoch}/{total_epoch+1}, Loss: {current_loss}')
             total_epoch += 1
         # Decay epsilon after each update
         self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)

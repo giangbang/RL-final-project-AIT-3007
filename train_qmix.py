@@ -102,6 +102,7 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
     learner.target_mixer.train()
     loss, strategy_reward, env_reward, target_reward = None, None, None, None
     for episode in range(max_episodes):
+        print(f"Start episode {episode} ----------------------")
         env.reset()
         episode_reward = 0
         
