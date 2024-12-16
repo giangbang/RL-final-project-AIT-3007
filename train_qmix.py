@@ -61,7 +61,7 @@ learner = QMix_Trainer(
     hidden_dim=hidden_dim,
     hypernet_dim=hypernet_dim,
     target_update_interval=target_update_interval,
-    lr=5e-4,
+    lr=1e-3,
     epsilon_start=args.epsilon_start,
     epsilon_end=args.epsilon_end,
     epsilon_decay=args.epsilon_decay,
@@ -186,6 +186,7 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
         # Training step
         if len(replay_buffer) >= batch_size:
             loss, target_reward, env_reward, strategy_reward = learner.update(batch_size)
+            # replay_buffer.buffer = []
 
         # Save model periodically
         if episode % save_interval == 0:
