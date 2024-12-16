@@ -37,12 +37,10 @@ target_update_interval = args.target_update_interval
 model_path = args.model_path
     
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-env = battle_v4.env(
-    map_size=45,
-    minimap_mode=False,
-    extra_features=False,
-    max_cycles=300
-)
+env = battle_v4.env(map_size=45, minimap_mode=False, step_reward=-0.005,
+dead_penalty=-1, attack_penalty=-0.1, attack_opponent_reward=1.0,
+max_cycles=300, extra_features=False)
+
 env.reset()
 obs_dim = dummy_cnn.get_output_dim(env.observation_space("blue_0").shape[:-1])
 state_dim = dummy_cnn.get_output_dim(env.state().shape[:-1])
