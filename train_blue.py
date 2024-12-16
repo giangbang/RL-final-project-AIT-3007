@@ -6,6 +6,7 @@ from collections import deque
 from magent2.environments import battle_v4
 from torch_model import QNetwork
 import torch.optim as optim
+from final_torch_model import QNetwork as FinalQNetwork
 
 class ReplayBuffer:
     def __init__(self, capacity):
@@ -50,6 +51,21 @@ def train():
     target_network = initialize_q_network(env, device)
     target_network.load_state_dict(q_network.state_dict())
     target_network.eval()
+
+    red_final_network = FinalQNetwork(
+        env.observation_space("red_0").shape, 
+        env.action_space("red_0").n
+    ).to(device)
+    red_final_network.load_state_dict(
+        torch.load("red_final.pt", map_location=device)
+    )
+    red_final_network.eval()
+
+    def red_final_policy(obs):
+        observation = torch.tensor(obs, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0).to(device)
+        with torch.no_grad():
+            q_values = red_final_network(observation)
+        return q_values.argmax().item()
 
     # Optimizer and Replay Buffer
     optimizer = optim.Adam(q_network.parameters(), lr=1e-4)
@@ -120,7 +136,7 @@ def train():
                         step_count += 1
                         total_reward += reward
                     else:
-                        action = env.action_space(agent).sample()
+                        action = red_final_policy(obs)
 
                 env.step(action)
 
@@ -136,8 +152,15 @@ def train():
 
         print(f"Episode {episode + 1}/{num_episodes}, Total Reward: {total_reward:.2f}, Epsilon: {epsilon:.4f}")
 
+        if episode % 10 == 0:
+            print(f"Episode {episode}/{num_episodes}")
+            print(f"Total Reward: {total_reward:.2f}")
+            print(f"Epsilon: {epsilon:.4f}")
+            print(f"Buffer size: {len(replay_buffer)}")
+            print("-" * 50)
+
         if (episode + 1) % 100 == 0:
-            checkpoint_path = f"blue_checkpoint_{episode + 1}.pt"
+            checkpoint_path = f"blue_vs_final_checkpoint_{episode + 1}.pt"
             torch.save(q_network.state_dict(), checkpoint_path)
             print(f"Model checkpoint saved at episode {episode + 1}")
 

@@ -7,144 +7,111 @@ import numpy as np
 try:
     from tqdm import tqdm
 except ImportError:
-    tqdm = lambda x, *args, **kwargs: x  # Fallback: tqdm becomes a no-op
-
+    tqdm = lambda x, *args, **kwargs: x
 
 def eval():
     max_cycles = 300
     env = battle_v4.env(map_size=45, max_cycles=max_cycles)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
+    # Load all models
+    blue_network = QNetwork(env.observation_space("blue_0").shape, env.action_space("blue_0").n).to(device)
+    blue_network.load_state_dict(torch.load("blue.pt", map_location=device))
+    blue_network.eval()
+
+    red_network = QNetwork(env.observation_space("red_0").shape, env.action_space("red_0").n).to(device)
+    red_network.load_state_dict(torch.load("red.pt", map_location=device))
+    red_network.eval()
+
+    red_final_network = FinalQNetwork(env.observation_space("red_0").shape, env.action_space("red_0").n).to(device)
+    red_final_network.load_state_dict(torch.load("red_final.pt", map_location=device))
+    red_final_network.eval()
+
+    # Define policies
     def random_policy(env, agent, obs):
         return env.action_space(agent).sample()
 
-    # Load pretrained blue agent
-    blue_q_network = QNetwork(
-        env.observation_space("blue_0").shape, env.action_space("blue_0").n
-    )
-    blue_q_network.load_state_dict(torch.load("blue.pt", map_location=device))
-    blue_q_network.to(device)
-    blue_q_network.eval()
-
-    def blue_pretrained_policy(env, agent, obs):
-        observation = (
-            torch.tensor(obs, dtype=torch.float32)
-            .permute(2, 0, 1)
-            .unsqueeze(0)
-            .to(device)
-        )
+    def blue_policy(env, agent, obs):
+        observation = torch.tensor(obs, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0).to(device)
         with torch.no_grad():
-            action = blue_q_network(observation).argmax().item()
-        return action
+            q_values = blue_network(observation)
+        return q_values.argmax().item()
 
-    # Load pretrained red agent
-    red_q_network = QNetwork(
-        env.observation_space("red_0").shape, env.action_space("red_0").n
-    )
-    q_network.load_state_dict(
-        torch.load("red.pt", weights_only=True, map_location="cpu")
-    )
-    q_network.to(device)
-
-    def red_pretrained_policy(env, agent, obs):
-        observation = (
-            torch.tensor(obs, dtype=torch.float32)
-            .permute(2, 0, 1)
-            .unsqueeze(0)
-            .to(device)
-        )
+    def red_policy(env, agent, obs):
+        observation = torch.tensor(obs, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0).to(device)
         with torch.no_grad():
-            action = red_q_network(observation).argmax().item()
-        return action
+            q_values = red_network(observation)
+        return q_values.argmax().item()
 
-    def run_eval(env, red_policy, blue_policy, n_episode: int = 100):
-        red_win, blue_win = [], []
-        red_tot_rw, blue_tot_rw = [], []
-        n_agent_each_team = len(env.env.action_spaces) // 2
+    def red_final_policy(env, agent, obs):
+        observation = torch.tensor(obs, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0).to(device)
+        with torch.no_grad():
+            q_values = red_final_network(observation)
+        return q_values.argmax().item()
+
+    def run_eval(env, blue_policy, red_policy, n_episode=30):
+        blue_wins, red_wins, draws = 0, 0, 0
+        blue_total_reward, red_total_reward = 0, 0
 
         for _ in tqdm(range(n_episode)):
             env.reset()
-            n_dead = {"red": 0, "blue": 0}
-            red_reward, blue_reward = 0, 0
-            who_loses = None
+            episode_blue_reward, episode_red_reward = 0, 0
+            done = {agent: False for agent in env.agents}
 
-            for agent in env.agent_iter():
-                observation, reward, termination, truncation, info = env.last()
-                agent_team = agent.split("_")[0]
-                if agent_team == "red":
-                    red_reward += reward
-                else:
-                    blue_reward += reward
-
-                if env.unwrapped.frames >= max_cycles and who_loses is None:
-                    who_loses = "red" if n_dead["red"] > n_dead["blue"] else "draw"
-                    who_loses = "blue" if n_dead["red"] < n_dead["blue"] else who_loses
-
-                if termination or truncation:
-                    action = None  # this agent has died
-                    n_dead[agent_team] = n_dead[agent_team] + 1
-
-                    if (
-                        n_dead[agent_team] == n_agent_each_team
-                        and who_loses
-                        is None  # all agents are terminated at the end of episodes
-                    ):
-                        who_loses = agent_team
-                else:
-                    if agent_team == "red":
-                        action = red_policy(env, agent, observation)
+            while not all(done.values()):
+                for agent in env.agent_iter():
+                    obs, reward, termination, truncation, _ = env.last()
+                    if termination or truncation:
+                        action = None
+                        done[agent] = True
                     else:
-                        action = blue_policy(env, agent, observation)
+                        if agent.startswith("blue"):
+                            action = blue_policy(env, agent, obs)
+                            episode_blue_reward += reward
+                        else:
+                            action = red_policy(env, agent, obs)
+                            episode_red_reward += reward
+                    env.step(action)
 
-                env.step(action)
+            blue_alive = sum(1 for agent in env.agents if agent.startswith("blue"))
+            red_alive = sum(1 for agent in env.agents if agent.startswith("red"))
 
-            red_win.append(who_loses == "blue")
-            blue_win.append(who_loses == "red")
+            if blue_alive > red_alive:
+                blue_wins += 1
+            elif red_alive > blue_alive:
+                red_wins += 1
+            else:
+                draws += 1
 
-            red_tot_rw.append(red_reward / n_agent_each_team)
-            blue_tot_rw.append(blue_reward / n_agent_each_team)
+            blue_total_reward += episode_blue_reward
+            red_total_reward += episode_red_reward
 
         return {
-            "winrate_red": np.mean(red_win),
-            "winrate_blue": np.mean(blue_win),
-            "average_rewards_red": np.mean(red_tot_rw),
-            "average_rewards_blue": np.mean(blue_tot_rw),
+            "blue_wins": blue_wins,
+            "red_wins": red_wins,
+            "draws": draws,
+            "win_rate_blue": blue_wins/n_episode,
+            "win_rate_red": red_wins/n_episode,
+            "avg_reward_blue": blue_total_reward/n_episode,
+            "avg_reward_red": red_total_reward/n_episode
         }
 
-    print("=" * 20)
-    print("Eval: Blue (trained) vs Red (random)")
-    print(
-        run_eval(
-            env=env,
-            blue_policy=blue_pretrained_policy,
-            red_policy=random_policy,
-            n_episode=30,
-        )
-    )
-    print("=" * 20)
+    # Run evaluations
+    print("=" * 50)
+    print("Evaluating blue.pt vs Random")
+    results = run_eval(env, blue_policy, random_policy)
+    print("Results:", results)
+    print("=" * 50)
 
-    print("Eval: Blue (trained) vs Red (trained)")
-    print(
-        run_eval(
-            env=env,
-            blue_policy=blue_pretrained_policy,
-            red_policy=red_pretrained_policy,
-            n_episode=30,
-        )
-    )
-    print("=" * 20)
+    print("Evaluating blue.pt vs red.pt")
+    results = run_eval(env, blue_policy, red_policy)
+    print("Results:", results)
+    print("=" * 50)
 
-    print("Eval with final trained policy")
-    print(
-        run_eval(
-            env=env,
-            red_policy=final_pretrain_policy,
-            blue_policy=random_policy,
-            n_episode=30,
-        )
-    )
-    print("=" * 20)
-
+    print("Evaluating blue.pt vs red_final.pt")
+    results = run_eval(env, blue_policy, red_final_policy)
+    print("Results:", results)
+    print("=" * 50)
 
 if __name__ == "__main__":
     eval()
