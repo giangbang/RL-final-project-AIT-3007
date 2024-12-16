@@ -1,4 +1,53 @@
 import numpy as np
+import pickle
+
+class Normalizer:
+    def __init__(self, shape):
+        self.mean = np.zeros(shape, dtype=np.float32)
+        self.var = np.ones(shape, dtype=np.float32)
+        self.count = 0
+
+    def update(self, data):
+        batch_mean = np.mean(data, axis=0)
+        batch_var = np.var(data, axis=0)
+        batch_count = data.shape[0]
+
+        self.mean, self.var, self.count = self._update_mean_var_count(
+            self.mean, self.var, self.count, batch_mean, batch_var, batch_count
+        )
+
+    def normalize(self, data):
+        return (data - self.mean) / (np.sqrt(self.var) + 1e-8)
+
+    @staticmethod
+    def _update_mean_var_count(mean, var, count, batch_mean, batch_var, batch_count):
+        delta = batch_mean - mean
+        tot_count = count + batch_count
+
+        new_mean = mean + delta * batch_count / tot_count
+        m_a = var * count
+        m_b = batch_var * batch_count
+        m2 = m_a + m_b + np.square(delta) * count * batch_count / tot_count
+        new_var = m2 / tot_count
+        new_count = tot_count
+
+        return new_mean, new_var, new_count
+
+    def update_normalize(self, data):
+        self.update(data)
+        return self.normalize(data)
+
+    def save(self, filepath):
+        with open(filepath, 'wb') as f:
+            pickle.dump({'mean': self.mean, 'var': self.var, 'count': self.count}, f)
+
+    def load(self, filepath):
+        with open(filepath, 'rb') as f:
+            data = pickle.load(f)
+            self.mean = data['mean']
+            self.var = data['var']
+            self.count = data['count']
+
 def process_batch(batchs):
     # Initialize dictionaries to hold lists for each field
     batch_blue = {
