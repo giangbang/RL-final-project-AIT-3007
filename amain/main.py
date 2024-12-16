@@ -13,7 +13,7 @@ def parse_args() -> argparse.Namespace:
     # Training hyperparameters
     parser.add_argument("--learning_rate", type=float, default=1e-3,
                         help="Learning rate for training")
-    parser.add_argument("--batch_size", type=int, default=64,
+    parser.add_argument("--batch_size", type=int, default=1,
                         help="Batch size for training")
     parser.add_argument("--gamma", type=float, default=0.99,
                         help="Discount factor")
@@ -23,13 +23,14 @@ def parse_args() -> argparse.Namespace:
                         help="Decay rate of epsilon")
     parser.add_argument("--epsilon_min", type=float, default=0.06,
                         help="Minimum value of epsilon")
-    parser.add_argument("--num_episodes", type=int, default=64,
+    parser.add_argument("--num_episodes", type=int, default=5000,
                         help="Number of episodes to train")
-    parser.add_argument("--update_step", type=int, default=200,
+    parser.add_argument("--update_step", type=int, default=50,
                         help="Number of steps between target network updates")
     parser.add_argument("--tau", type=float, default=0.8,
                         help="Soft update coefficient for target networks")
-
+    parser.add_argument("--sub_bs", type=int, default=1,
+                        help="Sub batch size for training (in each episode)")
     args = parser.parse_args()
     return args
 
@@ -52,6 +53,7 @@ if __name__ == "__main__":
             "num_episodes": args.num_episodes,
             "update_step": args.update_step,
             "tau": args.tau,
+            "sub_bs" : args.sub_bs,
         }
     )
     config = wandb.config
