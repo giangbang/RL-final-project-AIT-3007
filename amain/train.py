@@ -21,15 +21,15 @@ def train(config):
     learning_rate = config.learning_rate
     gamma = config.gamma
     update_step = config.update_step
-
+    sub_bs = config.sub_bs
     num_envs = 2 
     # env = battle_v4.parallel_env(map_size=30, minimap_mode=False, max_cycles=300, seed=10)
-    env = battle_v4.parallel_env(map_size=45, minimap_mode=False, step_reward=-0.005,
-            dead_penalty=-0.1, attack_penalty=-0.1, attack_opponent_reward=0.2, max_cycles=200, 
+    env = battle_v4.parallel_env(map_size=15, minimap_mode=False, step_reward=-0.005,
+            dead_penalty=-0.1, attack_penalty=-0.1, attack_opponent_reward=0.2, max_cycles=100, 
             extra_features=False)
     env = ss.black_death_v3(env)
     # env = ss.pad_observations_v0(env)
-    env = AsyncPettingZooVecEnv([lambda: env for _ in range(num_envs)])
+    # env = AsyncPettingZooVecEnv([lambda: env for _ in range(num_envs)])
 
     env.reset()
 
@@ -53,6 +53,7 @@ def train(config):
         num_actions=21,
         lr=learning_rate,
         gamma=gamma,
+        sub_batch_size=sub_bs
     )
     qmix_red = QMIX(
         num_agents=num_red_agents,
@@ -62,6 +63,7 @@ def train(config):
         num_actions=21,
         lr=learning_rate,
         gamma=gamma,
+        sub_batch_size=sub_bs
     )
 
     # Initialize replay buffer
@@ -115,11 +117,14 @@ def train(config):
             episode_reward_blue += reward_blue
             episode_reward_red += reward_red
 
+            a_blue = np.array([actions_blue[a] for a in blue_agents])
+            a_red = np.array([actions_red[a] for a in red_agents])
+
             obs_save = {"blue": obs_array_blue, "red": obs_array_red} # obs_array_blue: (81, 13, 13, 5)
             reward_save = {"blue": reward_blue, "red": reward_red} # reward_blue: (1,)
             next_obs_save = {"blue": np.stack([next_obs[a] for a in blue_agents], axis=0), # (81, 13, 13, 5)
                              "red": np.stack([next_obs[a] for a in red_agents], axis=0)}
-            actions = {"blue": actions_blue, "red": actions_red} # actions_blue: (81,)
+            actions = {"blue": a_blue, "red": a_red} # actions_blue: (81,)
             dones = {"blue": done_all, "red": done_all} # done_all: bool
             global_state = np.array(global_state)
             next_global_state = np.array(next_global_state)
@@ -145,6 +150,8 @@ def train(config):
             # Training step
             if len(rb) >= batch_size:
                 batch = rb.sample(batch_size)
+                if len(rb) >= 64:
+                    batch = rb.sample(64)
                 count += batch_size
                 # batch['obs']: (B, episode_n, N, 13, 13, 5)
                 # batch['actions']: (B, episode_n, N)
@@ -154,8 +161,8 @@ def train(config):
                 # batch['next_state']: (B, episode_n, 45, 45, 5)
                 # batch['dones']: (B, episode_n, N)
                 batch_blue, batch_red = process_batch(batch)
-                loss_blue = qmix_blue.update(batch_blue)
-                loss_red = qmix_red.update(batch_red)
+                loss_blue = qmix_blue.update(batch_blue, ep)
+                loss_red = qmix_red.update(batch_red,ep)
 
                 wandb.log({
                         "loss_blue": loss_blue.item(),
@@ -174,7 +181,7 @@ def train(config):
         "episode_reward_red": episode_reward_red,
         "episode": ep
         })
-        if ep+1 % 20 == 0:
+        if ((ep+1) % update_step) == 0:
                 save_path_blue = os.path.join("./model", f"qmix_blue_ep{ep}.pth")
                 save_path_red = os.path.join("./model", f"qmix_red_ep{ep}.pth")
                 torch.save(qmix_blue.agent_q_network.state_dict(), save_path_blue)
