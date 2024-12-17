@@ -59,8 +59,7 @@ def get_all_states(env, dead_agents):
         terminations.append(termination)
         truncations.append(truncation)
         infos.append(info)
-    state = env.state()
-    return observations, state, rewards, terminations, truncations, infos
+    return observations, rewards, terminations, truncations, infos
 
 def make_action(actions, env, dead_agents, red_agent=None):
     """
@@ -96,5 +95,8 @@ def make_action(actions, env, dead_agents, red_agent=None):
                     env.step(env.action_space(agent).sample())
                 else:
                     env.step(get_pretrain_red_policy(red_agent)(env, agent, observation))
+    while env.agent_selection != env.agents[0]:
+        dead_agents.append(env.agent_selection)
+        env.step(None)
 
     return dead_agents

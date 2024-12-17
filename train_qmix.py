@@ -150,7 +150,7 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
                 print("Environment truncated!!!")
                 break
             # Get all blue agents states and rewards
-            observations, state, rewards, terminations, truncations, infos = get_all_states(env, dead_agents)
+            observations, rewards, terminations, truncations, infos = get_all_states(env, dead_agents)
             if len(observations) == 0:  # No blue agents alive
                 break
             observations = np.stack(observations) # [n_agents, obs_dim]
@@ -161,7 +161,7 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
             # Execute actions and collect next states/rewards
             # Save dead agents after making actions
             dead_agents = make_action(actions, env, dead_agents, red_agent)
-            next_observations, next_state, rewards, terminations, truncations, infos = get_all_states(env, dead_agents)
+            next_observations, rewards, terminations, truncations, infos = get_all_states(env, dead_agents)
             if len(next_observations) == 0:  # No blue agents alive
                 break
             next_observations = np.stack(next_observations) # [n_agents, obs_dim]

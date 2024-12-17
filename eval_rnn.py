@@ -195,7 +195,7 @@ if __name__ == "__main__":
     if args.render:
         render_mode = "human"
     # Khởi tạo environment
-    env = battle_v4.env(map_size=30, minimap_mode=False, extra_features=False, render_mode=render_mode)
+    env = battle_v4.env(map_size=45, max_cycles=100, minimap_mode=False, extra_features=False, render_mode=render_mode)
     
     q_network = QNetwork(
         env.observation_space("red_0").shape, env.action_space("red_0").n
