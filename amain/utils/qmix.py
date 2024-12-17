@@ -10,12 +10,12 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 # torch.set_float32_matmul_precision('medium')
 
 class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, stride=1, dilation=1):
+    def __init__(self, in_channels, out_channels, stride=1, dilation=1, slope=0):
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3,
                                stride=stride, dilation=dilation, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(out_channels)
-        self.leaky_relu = nn.LeakyReLU(0.1, inplace=True)
+        self.leaky_relu = nn.LeakyReLU(slope, inplace=True)
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3,
                                stride=1, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(out_channels)
@@ -49,10 +49,10 @@ class ResidualBlock(nn.Module):
         return out
 
 class ResidualFCBlock(nn.Module):
-    def __init__(self, in_features, out_features, dropout=0.1):
+    def __init__(self, in_features, out_features, dropout=0.1, negative_slope=0):
         super(ResidualFCBlock, self).__init__()
         self.fc1 = nn.Linear(in_features, out_features)
-        self.leaky_relu = nn.LeakyReLU(0.1, inplace=True)
+        self.leaky_relu = nn.LeakyReLU(negative_slope=negative_slope, inplace=True)
         self.dropout = nn.Dropout(dropout)
         self.fc2 = nn.Linear(out_features, out_features)
         
@@ -65,9 +65,9 @@ class ResidualFCBlock(nn.Module):
             self.residual = nn.Identity()
         
         # Initialization
-        nn.init.kaiming_normal_(self.fc1.weight, mode='fan_in', nonlinearity='leaky_relu')
+        nn.init.kaiming_normal_(self.fc1.weight, mode='fan_in', nonlinearity='relu')
         nn.init.constant_(self.fc1.bias, 0)
-        nn.init.kaiming_normal_(self.fc2.weight, mode='fan_in', nonlinearity='leaky_relu')
+        nn.init.kaiming_normal_(self.fc2.weight, mode='fan_in', nonlinearity='relu')
         nn.init.constant_(self.fc2.bias, 0)
 
     def forward(self, x):
@@ -91,7 +91,7 @@ class AgentQNetwork(nn.Module):
         self.input_conv = nn.Sequential(
             nn.Conv2d(input_channels, 16, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(16),
-            nn.LeakyReLU(0.1, inplace=True),
+            nn.LeakyReLU(0, inplace=True),
             ResidualBlock(16, 32),
             ResidualBlock(32, 32),
             ResidualBlock(32, 16),
@@ -103,6 +103,7 @@ class AgentQNetwork(nn.Module):
             ResidualBlock(32, 64, stride=1),
             ResidualBlock(64, 64),
             nn.MaxPool2d(kernel_size=2, stride=2),
+            # ResidualBlock(64, 64, stride=1),
         )
         # Calculate the flattened feature size
         # Assuming input image size is (C, H, W) = (5, 45, 45)
@@ -110,11 +111,11 @@ class AgentQNetwork(nn.Module):
         self.feature_dim = 64
         
         self.fc = nn.Sequential(
-            ResidualFCBlock(self.feature_dim, 128),
+            ResidualFCBlock(self.feature_dim, 256),
             nn.Dropout(0.2),
-            ResidualFCBlock(128, 128),
+            ResidualFCBlock(256, 64),
             nn.Dropout(0.2),
-            ResidualFCBlock(128, 64),
+            ResidualFCBlock(64, 64),
             nn.Dropout(0.2),
             nn.Linear(64, num_actions)
         )
@@ -126,12 +127,12 @@ class AgentQNetwork(nn.Module):
         # Initialize weights
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='leaky_relu')
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
             elif isinstance(m, nn.BatchNorm2d):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.Linear):
-                nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='leaky_relu')
+                nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
@@ -153,7 +154,7 @@ class AgentQNetwork(nn.Module):
 # Mixing Network
 # -------------------------
 class MixingNetwork(nn.Module):
-    def __init__(self, num_agents, state_shape=(45,45,5), embed_dim=32, use_attention=True):
+    def __init__(self, num_agents, state_shape=(45,45,5), embed_dim=64, use_attention=True):
         """
         Mixing network for QMIX with optional attention mechanism.
         
@@ -182,9 +183,10 @@ class MixingNetwork(nn.Module):
             ResidualBlock(64, 64),
             nn.BatchNorm2d(64),
             nn.ReLU(),
-            ResidualBlock(64, 128, stride=2),  # Downsample
-            nn.BatchNorm2d(128),
-            nn.ReLU(),
+            ResidualBlock(64, 64, stride=2),
+            # ResidualBlock(64, 128, stride=2),  # Downsample
+            # nn.BatchNorm2d(128),
+            # nn.ReLU(),
             # ResidualBlock(128, 128),
             # nn.BatchNorm2d(128),
             # nn.ReLU(),
@@ -193,26 +195,29 @@ class MixingNetwork(nn.Module):
             # nn.ReLU(),
             nn.AdaptiveAvgPool2d((1,1))  # Output: (batch_size, 64, 1, 1)
         )
-        self.state_dim = 128
+        self.state_dim = 64
 
         # Hypernetworks for weights
         self.hyper_w_1 = nn.Sequential(
-            ResidualFCBlock(self.state_dim, embed_dim),
+            ResidualFCBlock(self.state_dim, embed_dim, negative_slope=0),
             nn.ReLU(),
-            nn.Linear(embed_dim, num_agents * embed_dim)
+            nn.Linear(embed_dim, num_agents * embed_dim),
+            nn.ReLU()
         )
         self.hyper_w_final = nn.Sequential(
-            ResidualFCBlock(self.state_dim, embed_dim),
+            ResidualFCBlock(self.state_dim, embed_dim, negative_slope=0),
             nn.ReLU(),
-            nn.Linear(embed_dim, embed_dim)
+            nn.Linear(embed_dim, embed_dim),
+            nn.ReLU()
         )
 
         # Hypernetworks for biases
-        self.hyper_b_1 = ResidualFCBlock(self.state_dim, embed_dim)
+        self.hyper_b_1 = ResidualFCBlock(self.state_dim, embed_dim, negative_slope=0)
         self.hyper_b_final = nn.Sequential(
-            ResidualFCBlock(self.state_dim, embed_dim),
-            nn.ReLU(),
-            nn.Linear(embed_dim, 1)
+            ResidualFCBlock(self.state_dim, embed_dim,negative_slope=0),
+            nn.ReLU(),  
+            nn.Linear(embed_dim, 1),
+            nn.ReLU()
         )
         
         # Optional attention mechanism
@@ -224,7 +229,7 @@ class MixingNetwork(nn.Module):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 # Kaiming Initialization
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='leaky_relu')
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
             elif isinstance(m, nn.BatchNorm2d):
@@ -453,7 +458,7 @@ class QMIX:
                     targets = rewards_sb + self.gamma * (1 - dones_sb) * target_q_tot  # Shape: (sb_size, 1)
 
                 # Compute loss
-                loss = self.loss_fn(q_tot, targets.detach()) - 0.005 * entropy
+                loss = self.loss_fn(q_tot, targets.detach()) - 0.01 * entropy
                 total_loss += loss.item()
                 loss_prio += loss.item()
                 # Backpropagation and optimization
