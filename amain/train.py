@@ -30,12 +30,15 @@ def set_seed(seed: int):
 #     std = np.std(data, axis=(0, 1))
 #     # I want to take care situation where std is 0
 #     return (data - mean) / (std + 1e-8)
-def add_parameter_noise(model, stddev=0.01):
+# File: [amain/train.py](amain/train.py)
+
+def add_parameter_noise(model, stddev=0.004):
     """Adds parameter-space noise to a model."""
     with torch.no_grad():
         for param in model.parameters():
             noise = torch.randn_like(param) * stddev
-            param.add_(noise)
+            param.add_(torch.abs(noise))
+    # stddev *= 0.998  # Decay the stddev
 
 def train(config):
     # Update variables with config values
@@ -55,7 +58,7 @@ def train(config):
     num_envs = 2 
     # env = battle_v4.parallel_env(map_size=30, minimap_mode=False, max_cycles=300, seed=10)
     env = battle_v4.parallel_env(map_size=45, minimap_mode=False, step_reward=-0.008,
-            dead_penalty=-0.2, attack_penalty=-0.1, attack_opponent_reward=0.8, max_cycles=360, 
+            dead_penalty=-0.2, attack_penalty=-0.1, attack_opponent_reward=0.8, max_cycles=320, 
             extra_features=False)
     env = ss.black_death_v3(env)
 
@@ -123,7 +126,7 @@ def train(config):
         terminated = False
         episode = []
         count += 1
-        if ep < 200:
+        if ep < 60:
             add_parameter_noise(qmix_blue.agent_q_network)
             add_parameter_noise(qmix_red.agent_q_network)
         while not terminated:
@@ -234,9 +237,11 @@ def train(config):
                 torch.save(qmix_red.agent_q_network.state_dict(), save_path_red)
             # Check if the save time has passed
         elapsed_time = time.time() - start_time
-        if elapsed_time >= save_time_seconds:
+        if (save_time_seconds - elapsed_time) >= 100:
             print(f"Saving model after {save_time_seconds / 3600} hours of training...")
-            torch.save(qmix_blue.state_dict(), 'model_bafter_2_hours.pth')
-            torch.save(qmix_red.state_dict(), 'model_rafter_2_hours.pth')
+            torch.save(qmix_blue.agent_q_network.state_dict(), 'aqn_model_bafter_2_hours.pth')
+            torch.save(qmix_red.agent_q_network.state_dict(), 'aqn_model_rafter_2_hours.pth')
+            torch.save(qmix_blue.mixing_network.state_dict(), 'mn_model_btarget_after_2_hours.pth')
+            torch.save(qmix_red.mixing_network.state_dict(), 'mn_model_rtarget_after_2_hours.pth')
             break  # Optionally, stop training after saving the model
     wandb.finish()
