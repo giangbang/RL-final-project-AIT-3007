@@ -7,13 +7,13 @@ from typing import List
 from torch.nn import functional as F
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-torch.set_float32_matmul_precision('medium')
+# torch.set_float32_matmul_precision('medium')
 
 class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, stride=1):
+    def __init__(self, in_channels, out_channels, stride=1, dilation=1):
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3,
-                               stride=stride, padding=1, bias=False)
+                               stride=stride, dilation=dilation, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(out_channels)
         self.leaky_relu = nn.LeakyReLU(0.1, inplace=True)
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3,
@@ -89,28 +89,34 @@ class AgentQNetwork(nn.Module):
         
         # Initial convolution layers
         self.input_conv = nn.Sequential(
-            nn.Conv2d(input_channels, 32, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(32),
+            nn.Conv2d(input_channels, 16, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(16),
             nn.LeakyReLU(0.1, inplace=True),
-            ResidualBlock(32, 64),
+            ResidualBlock(16, 32),
+            ResidualBlock(32, 32),
+            ResidualBlock(32, 16),
+            ResidualBlock(16, 16),
+            nn.MaxPool2d(kernel_size=2, stride=2),  # Explicit Max Pooling
+            ResidualBlock(16, 32, stride=1),  # Adjust stride since pooling is handled
+            ResidualBlock(32, 32),
+            nn.MaxPool2d(kernel_size=2, stride=2),  # Another pooling layer
+            ResidualBlock(32, 64, stride=1),
             ResidualBlock(64, 64),
-            ResidualBlock(64, 128, stride=2),  # Downsample
-            ResidualBlock(128, 128),
-            ResidualBlock(128, 256, stride=2),  # Downsample
-            ResidualBlock(256, 256),
-            ResidualBlock(256, 512, stride=2),  # Downsample
+            nn.MaxPool2d(kernel_size=2, stride=2),
         )
-        
         # Calculate the flattened feature size
         # Assuming input image size is (C, H, W) = (5, 45, 45)
         # After two downsampling layers with stride=2: H and W become 11 (45/2 -> 22, then 11)
-        self.feature_dim = 512 * 2 * 2  # Adjust based on actual input size
+        self.feature_dim = 64
         
         self.fc = nn.Sequential(
-            ResidualFCBlock(self.feature_dim, 512),
-            ResidualFCBlock(512, 256),
-            ResidualFCBlock(256, 128),
-            nn.Linear(128, num_actions)
+            ResidualFCBlock(self.feature_dim, 128),
+            nn.Dropout(0.2),
+            ResidualFCBlock(128, 128),
+            nn.Dropout(0.2),
+            ResidualFCBlock(128, 64),
+            nn.Dropout(0.2),
+            nn.Linear(64, num_actions)
         )
         
         # Initialization for the final layer
@@ -147,7 +153,7 @@ class AgentQNetwork(nn.Module):
 # Mixing Network
 # -------------------------
 class MixingNetwork(nn.Module):
-    def __init__(self, num_agents, state_shape=(45,45,5), embed_dim=256, use_attention=True):
+    def __init__(self, num_agents, state_shape=(45,45,5), embed_dim=32, use_attention=True):
         """
         Mixing network for QMIX with optional attention mechanism.
         
@@ -167,7 +173,10 @@ class MixingNetwork(nn.Module):
             nn.Conv2d(state_shape[2], 32, kernel_size=3, padding=1),
             nn.BatchNorm2d(32),
             nn.ReLU(),
-            ResidualBlock(32, 64),
+            ResidualBlock(32, 32),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            ResidualBlock(32, 64, stride=2),
             nn.BatchNorm2d(64),
             nn.ReLU(),
             ResidualBlock(64, 64),
@@ -176,39 +185,38 @@ class MixingNetwork(nn.Module):
             ResidualBlock(64, 128, stride=2),  # Downsample
             nn.BatchNorm2d(128),
             nn.ReLU(),
-            ResidualBlock(128, 128),
-            nn.BatchNorm2d(128),
-            nn.ReLU(),
-            ResidualBlock(128, 256, stride=2),  # Downsample
-            nn.BatchNorm2d(256),
-            nn.ReLU(),
+            # ResidualBlock(128, 128),
+            # nn.BatchNorm2d(128),
+            # nn.ReLU(),
+            # ResidualBlock(128, 256, stride=2),  # Downsample
+            # nn.BatchNorm2d(256),
+            # nn.ReLU(),
             nn.AdaptiveAvgPool2d((1,1))  # Output: (batch_size, 64, 1, 1)
         )
-        self.state_dim = 256
+        self.state_dim = 128
 
         # Hypernetworks for weights
         self.hyper_w_1 = nn.Sequential(
-            nn.Linear(self.state_dim, embed_dim),
+            ResidualFCBlock(self.state_dim, embed_dim),
             nn.ReLU(),
             nn.Linear(embed_dim, num_agents * embed_dim)
         )
         self.hyper_w_final = nn.Sequential(
-            nn.Linear(self.state_dim, embed_dim),
+            ResidualFCBlock(self.state_dim, embed_dim),
             nn.ReLU(),
             nn.Linear(embed_dim, embed_dim)
         )
 
         # Hypernetworks for biases
-        self.hyper_b_1 = nn.Linear(self.state_dim, embed_dim)
+        self.hyper_b_1 = ResidualFCBlock(self.state_dim, embed_dim)
         self.hyper_b_final = nn.Sequential(
-            nn.Linear(self.state_dim, embed_dim),
+            ResidualFCBlock(self.state_dim, embed_dim),
             nn.ReLU(),
             nn.Linear(embed_dim, 1)
         )
         
         # Optional attention mechanism
-        if self.use_attention:
-            self.attention = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=4, batch_first=True)
+        self.attention = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=4, batch_first=True)
 
         self._initialize_weights()
 
@@ -216,7 +224,7 @@ class MixingNetwork(nn.Module):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 # Kaiming Initialization
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='leaky_relu')
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
             elif isinstance(m, nn.BatchNorm2d):
@@ -251,12 +259,10 @@ class MixingNetwork(nn.Module):
         w_final = torch.abs(self.hyper_w_final(state)).view(batch_size, self.embed_dim, 1)  # (batch_size, embed_dim, 1)
         b_final = self.hyper_b_final(state).view(batch_size, 1, 1)  # (batch_size, 1, 1)
 
-        if self.use_attention:
-            # Apply attention mechanism
-            attn_output, _ = self.attention(hidden, hidden, hidden)  # (batch_size, 1, embed_dim)
-            q_tot = torch.bmm(attn_output, w_final) + b_final  # (batch_size, 1, 1)
-        else:
-            q_tot = torch.bmm(hidden, w_final) + b_final  # (batch_size, 1, 1)
+
+        attn_output, _ = self.attention(hidden, hidden, hidden)  # (batch_size, 1, embed_dim)
+        q_tot = torch.bmm(attn_output, w_final) + b_final  # (batch_size, 1, 1)
+
 
         q_tot = q_tot.view(batch_size, 1)  # (batch_size, 1)
         return q_tot
@@ -297,13 +303,13 @@ class QMIX:
         self.target_mixing_network = MixingNetwork(num_agents, state_shape=state_shape).to(device)
         
         # Compile networks for potential speed-up (PyTorch 2.0+)
-        try:
-            self.agent_q_network = torch.compile(self.agent_q_network)
-            self.mixing_network = torch.compile(self.mixing_network)
-            self.target_agent_q_network = torch.compile(self.target_agent_q_network)
-            self.target_mixing_network = torch.compile(self.target_mixing_network)
-        except Exception as e:
-            print(f"Compilation failed: {e}. Using regular execution.")
+        # try:
+        #     self.agent_q_network = torch.compile(self.agent_q_network)
+        #     self.mixing_network = torch.compile(self.mixing_network)
+        #     self.target_agent_q_network = torch.compile(self.target_agent_q_network)
+        #     self.target_mixing_network = torch.compile(self.target_mixing_network)
+        # except Exception as e:
+        #     print(f"Compilation failed: {e}. Using regular execution.")
         # # If torch.compile fails (e.g., not using PyTorch 2.0), proceed without compiling
   
         self.update_target_hard()
@@ -323,8 +329,8 @@ class QMIX:
 
         self.loss_fn = nn.SmoothL1Loss().to(device)
         # Log models with wandb
-        wandb.watch(self.agent_q_network, log_freq=100)
-        wandb.watch(self.mixing_network, log_freq=100)
+        # wandb.watch(self.agent_q_network, log_freq=100)
+        # wandb.watch(self.mixing_network, log_freq=100)
 
     def select_actions(self, obs: torch.Tensor,  epsilon: float = 0.1) -> Dict[str, int]:
         """
@@ -447,7 +453,7 @@ class QMIX:
                     targets = rewards_sb + self.gamma * (1 - dones_sb) * target_q_tot  # Shape: (sb_size, 1)
 
                 # Compute loss
-                loss = self.loss_fn(q_tot, targets.detach()) - 0.01 * entropy
+                loss = self.loss_fn(q_tot, targets.detach()) - 0.005 * entropy
                 total_loss += loss.item()
                 loss_prio += loss.item()
                 # Backpropagation and optimization
@@ -492,3 +498,24 @@ class QMIX:
 
         for target_param, param in zip(self.target_mixing_network.parameters(), self.mixing_network.parameters()):
             target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
+
+    def num_params(self) -> int:
+        # calculate total paramater of AgentQNetwork and MixingNetwork
+        return sum(p.numel() for p in self.agent_q_network.parameters()) + sum(p.numel() for p in self.mixing_network.parameters())
+
+if __name__ == "__main__":
+    # Test QMIX
+    num_agents = 81 
+    state_shape = (45, 45, 5)
+    agent_ids = [f"blue_{i}" for i in range(81)]
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    num_actions = 21
+    qmix = QMIX(num_agents=num_agents, state_shape=state_shape, agent_ids=agent_ids, num_actions=num_actions, device=device)
+    print(f"Total number of parameters: {qmix.num_params()})")
+    input = torch.randn(81, 5, 13, 13)
+    aqn = AgentQNetwork(num_actions=num_actions)
+    print(aqn(input).shape)
+    mn = MixingNetwork(num_agents=num_agents, state_shape=state_shape)
+    agent_qs = torch.randn(1, 81)
+    state = torch.randn(1, 5, 45, 45)
+    print(mn(agent_qs, state).shape)
