@@ -13,8 +13,9 @@ def eval():
     max_cycles = 300
     env = battle_v4.env(map_size=45, max_cycles=max_cycles)
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    n_agent_each_team = len(env.env.action_spaces) // 2
 
-    # Load all models
+    # Load models
     blue_network = QNetwork(env.observation_space("blue_0").shape, env.action_space("blue_0").n).to(device)
     blue_network.load_state_dict(torch.load("blue.pt", map_location=device))
     blue_network.eval()
@@ -50,50 +51,52 @@ def eval():
         return q_values.argmax().item()
 
     def run_eval(env, blue_policy, red_policy, n_episode=30):
-        blue_wins, red_wins, draws = 0, 0, 0
-        blue_total_reward, red_total_reward = 0, 0
-
+        blue_wins, red_wins = [], []
+        blue_rewards, red_rewards = [], []
+        
         for _ in tqdm(range(n_episode)):
             env.reset()
-            episode_blue_reward, episode_red_reward = 0, 0
+            n_kills = {"blue": 0, "red": 0}
+            episode_rewards = {"blue": 0, "red": 0}
             done = {agent: False for agent in env.agents}
 
             while not all(done.values()):
                 for agent in env.agent_iter():
                     obs, reward, termination, truncation, _ = env.last()
+                    agent_team = agent.split("_")[0]
+                    
+                    # Track kills and rewards
+                    if reward > 4.5:  # Kill reward threshold
+                        n_kills[agent_team] += 1
+                    episode_rewards[agent_team] += reward
+
                     if termination or truncation:
                         action = None
                         done[agent] = True
                     else:
-                        if agent.startswith("blue"):
+                        if agent_team == "blue":
                             action = blue_policy(env, agent, obs)
-                            episode_blue_reward += reward
                         else:
                             action = red_policy(env, agent, obs)
-                            episode_red_reward += reward
                     env.step(action)
 
-            blue_alive = sum(1 for agent in env.agents if agent.startswith("blue"))
-            red_alive = sum(1 for agent in env.agents if agent.startswith("red"))
-
-            if blue_alive > red_alive:
-                blue_wins += 1
-            elif red_alive > blue_alive:
-                red_wins += 1
-            else:
-                draws += 1
-
-            blue_total_reward += episode_blue_reward
-            red_total_reward += episode_red_reward
+            # Determine winner based on kills
+            who_wins = "red" if n_kills["red"] >= n_kills["blue"] + 5 else "draw"
+            who_wins = "blue" if n_kills["blue"] >= n_kills["red"] + 5 else who_wins
+            
+            blue_wins.append(who_wins == "blue")
+            red_wins.append(who_wins == "red")
+            
+            # Average rewards per agent
+            blue_rewards.append(episode_rewards["blue"] / n_agent_each_team)
+            red_rewards.append(episode_rewards["red"] / n_agent_each_team)
 
         return {
-            "blue_wins": blue_wins,
-            "red_wins": red_wins,
-            "draws": draws,
-            "win_rate_blue": blue_wins/n_episode,
-            "win_rate_red": red_wins/n_episode,
-            "avg_reward_blue": blue_total_reward/n_episode,
-            "avg_reward_red": red_total_reward/n_episode
+            "blue_winrate": np.mean(blue_wins),
+            "red_winrate": np.mean(red_wins),
+            "draw_rate": 1 - np.mean(blue_wins) - np.mean(red_wins),
+            "blue_avg_reward": np.mean(blue_rewards),
+            "red_avg_reward": np.mean(red_rewards)
         }
 
     # Run evaluations

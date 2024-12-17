@@ -46,7 +46,7 @@ def record_video(env, blue_network, red_network=None, filename="battle.mp4"):
                     action = env.action_space(agent).sample()
 
         env.step(action)
-        if agent == env.agent[0]:
+        if agent == env.agents[0]:
             frames.append(env.render())
 
     # Save video
