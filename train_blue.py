@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-import numpy as np
+import numpy np
 import random
 from collections import deque
 from magent2.environments import battle_v4
@@ -42,7 +42,7 @@ def preprocess_state(state, device):
     state = np.array(state)
     return torch.from_numpy(state).float().permute(2, 0, 1).unsqueeze(0).to(device)
 
-def train(env, q_network, target_network, optimizer, replay_buffer, device, config):
+def train(env, q_network, target_network, optimizer, replay_buffer, red_final_policy, device, config):
     start_time = time.time()
     time_limit = 7200  # 2 hours
     epsilon = config['epsilon_start']
@@ -186,8 +186,11 @@ def main():
         loss.backward()
         optimizer.step()
 
+    # Move red_final_policy definition outside
+    red_final_policy = lambda obs: get_action(obs, red_final_network)
+
     # Main training loop
-    train(env, q_network, target_network, optimizer, replay_buffer, device, config)
+    train(env, q_network, target_network, optimizer, replay_buffer, red_final_policy, device, config)
 
     torch.save(q_network.state_dict(), "blue.pt")
     print("Training complete. Model saved as 'blue.pt'")
