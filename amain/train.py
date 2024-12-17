@@ -1,5 +1,6 @@
 from utils.qmix import QMIX
 from utils.rb import ReplayBuffer, PrioritizedReplayBuffer
+import gc
 # from utils.normalization import Normalizer
 from magent2.environments import battle_v4
 import supersuit as ss
@@ -7,17 +8,37 @@ import torch
 import numpy as np
 import os
 import wandb
-from utils.process import process_batch 
+from utils.process import process_batch, Normalizer 
+import random
+import numpy as np
+import torch
 
-def normalize_data( data):
-    # data shape : (H, W, C)
-    mean = np.mean(data, axis=(0, 1))
-    std = np.std(data, axis=(0, 1))
-    return (data - mean) / (std + 1e-8)
+def set_seed(seed: int):
+    """Set seed for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # if using multi-GPU
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
+# def normalize_data( data):
+#     # data shape : (H, W, C)
+#     mean = np.mean(data, axis=(0, 1))
+#     std = np.std(data, axis=(0, 1))
+#     # I want to take care situation where std is 0
+#     return (data - mean) / (std + 1e-8)
+def add_parameter_noise(model, stddev=0.01):
+    """Adds parameter-space noise to a model."""
+    with torch.no_grad():
+        for param in model.parameters():
+            noise = torch.randn_like(param) * stddev
+            param.add_(noise)
 
 def train(config):
     # Update variables with config values
+    set_seed(config.seed)
     num_episodes = config.num_episodes
     batch_size = config.batch_size
     epsilon = config.epsilon_start
@@ -30,7 +51,7 @@ def train(config):
     num_envs = 2 
     # env = battle_v4.parallel_env(map_size=30, minimap_mode=False, max_cycles=300, seed=10)
     env = battle_v4.parallel_env(map_size=45, minimap_mode=False, step_reward=-0.005,
-            dead_penalty=-0.1, attack_penalty=-0.1, attack_opponent_reward=0.2, max_cycles=10, 
+            dead_penalty=-0.1, attack_penalty=-0.1, attack_opponent_reward=0.2, max_cycles=260, 
             extra_features=False)
     env = ss.black_death_v3(env)
 
@@ -68,38 +89,41 @@ def train(config):
 
     # Initialize replay buffer
     field_names = ["obs", "actions", "rewards", "next_obs", "dones", "state", "next_state"]
-    rb = PrioritizedReplayBuffer(memory_size=60, field_names=field_names)
+    rb = PrioritizedReplayBuffer(memory_size=26, field_names=field_names)
 
     blue_agents = [agent for agent in env.agents if agent.startswith("blue")]
     red_agents = [agent for agent in env.agents if agent.startswith("red")]
     obs_shape = (13,13,5)
     state_shape = (45,45,5)
     count = 0
-    # normalizer_obs_b = Normalizer(shape=obs_shape)
-    # normalizer_obs_r = Normalizer(shape=obs_shape)
-    # normalizer_state = Normalizer(shape=state_shape)
+    normalizer_obs_b = Normalizer(shape=obs_shape)
+    normalizer_obs_r = Normalizer(shape=obs_shape)
+    normalizer_state = Normalizer(shape=state_shape)
     for ep in range(num_episodes):
         obs, _ = env.reset()
         # We will collect transitions after all blue agents have acted once (a "joint step")
         # the purpose of joint step is to collect joint transitions for QMIX training
-        global_state = env.state() # global state for mixing
-        global_state = normalize_data(global_state)
-        
+        global_state = env.state().astype(np.float32) # global state for mixing
+        global_state = normalizer_state.update_normalize(global_state)
+
+        obs_array_blue = np.stack([obs[a] for a in blue_agents], axis=0, dtype=np.float32)
+        obs_array_blue = normalizer_obs_b.update_normalize(obs_array_blue)
+
+        obs_array_red = np.stack([obs[a] for a in red_agents], axis=0, dtype=np.float32)
+        obs_array_red = normalizer_obs_r.update_normalize(obs_array_red)
+
         episode_reward_blue = 0
         episode_reward_red = 0
 
         terminated = False
         episode = []
-
+        count += 1
         while not terminated:
-            
-            obs_array_blue = np.stack([obs[a] for a in blue_agents], axis=0)
-            obs_array_blue = normalize_data(obs_array_blue)
+            if ep < 200:
+                add_parameter_noise(qmix_blue.agent_q_network)
+                add_parameter_noise(qmix_red.agent_q_network)
             actions_blue = qmix_blue.select_actions(torch.from_numpy(obs_array_blue).to(device), epsilon=epsilon) # return shape: (N_agents,)
 
-
-            obs_array_red = np.stack([obs[a] for a in red_agents], axis=0)
-            obs_array_red = normalize_data(obs_array_red)
             actions_red= qmix_red.select_actions(torch.from_numpy(obs_array_red).to(device), epsilon=epsilon) # return shape: (N_agents,)
 
             actions = {}
@@ -114,8 +138,8 @@ def train(config):
             for agent in env.agents:
                 dones[agent] = terminations[agent] or truncations[agent]
 
-            next_global_state = env.state()
-            next_global_state = normalize_data(next_global_state)
+            next_global_state = env.state().astype(np.float32)
+            next_global_state = normalizer_state.update_normalize(next_global_state)
 
             done_all = np.all(list(dones.values()))
 
@@ -128,11 +152,11 @@ def train(config):
             a_blue = np.array([actions_blue[a] for a in blue_agents])
             a_red = np.array([actions_red[a] for a in red_agents])
 
-            next_obs_array_blue = np.stack([next_obs[a] for a in blue_agents], axis=0)
-            next_obs_array_blue = normalize_data(next_obs_array_blue)
+            next_obs_array_blue = np.stack([next_obs[a] for a in blue_agents], axis=0, dtype=np.float32)
+            next_obs_array_blue = normalizer_obs_b.update_normalize(next_obs_array_blue)
 
-            next_obs_array_red = np.stack([next_obs[a] for a in red_agents], axis=0)
-            next_obs_array_red = normalize_data(next_obs_array_red)
+            next_obs_array_red = np.stack([next_obs[a] for a in red_agents], axis=0, dtype=np.float32)
+            next_obs_array_red = normalizer_obs_r.update_normalize(next_obs_array_red)
 
             obs_save = {"blue": obs_array_blue, "red": obs_array_red} # obs_array_blue: (81, 13, 13, 5)
             reward_save = {"blue": reward_blue, "red": reward_red} # reward_blue: (1,)
@@ -154,7 +178,8 @@ def train(config):
             }
             episode.append(transition)
 
-            obs = next_obs
+            obs_array_blue = next_obs_array_blue
+            obs_array_red = next_obs_array_red
             global_state = next_global_state
             terminated = done_all
 
@@ -162,10 +187,9 @@ def train(config):
             epsilon = max(epsilon * epsilon_decay, epsilon_min)
 
             # Training step
-            if len(rb) >= batch_size:
+            if len(rb) >= batch_size and count >= 12:
                 batch, ids = rb.sample(batch_size)
 
-                count += batch_size
                 # batch['obs']: (B, transitions, N, 13, 13, 5)
                 # batch['actions']: (B, transitions,N)
                 # batch['rewards']: (B, transitions, )
@@ -173,7 +197,7 @@ def train(config):
                 # batch['state']: (B, transitions, 45, 45, 5)
                 # batch['next_state']: (B, transitions, 45, 45, 5)
                 # batch['dones']: (B, transitions, )
-                batch_blue, batch_red = process_batch(batch)
+                batch_blue, batch_red = process_batch(batch, normalizer_obs_b=normalizer_obs_b, normalizer_obs_r=normalizer_obs_r, normalizer_state=normalizer_state)
                 loss_blue, priorities_b = qmix_blue.update(batch_blue, ep)
                 loss_red, priorities_r = qmix_red.update(batch_red,ep)
 
@@ -201,5 +225,4 @@ def train(config):
                 save_path_red = os.path.join("./model", f"qmix_red_ep{ep}.pth")
                 torch.save(qmix_blue.agent_q_network.state_dict(), save_path_blue)
                 torch.save(qmix_red.agent_q_network.state_dict(), save_path_red)
-
     wandb.finish()
