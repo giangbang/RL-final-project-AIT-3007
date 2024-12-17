@@ -3,10 +3,11 @@ import torch
 import argparse
 import random
 from magent2.environments import battle_v4
-from qmix import QMix_Trainer, ReplayBufferGRU, CNNFeatureExtractor
+from qmix import QMix_Trainer, ReplayBuffer
+from cnn import CNNFeatureExtractor
 from utils import get_all_states, make_action
 from torch_model import QNetwork
-from rnn_agent import RNN_Trainer
+from rnn_agent import RNN_Trainer, ReplayBufferGRU
 
 # Thêm đoạn parse arguments trước khi định nghĩa các biến
 parser = argparse.ArgumentParser(description='Train QMIX agents')
@@ -50,7 +51,7 @@ action_dim = env.action_space("blue_0").n
 action_shape = 1
 n_agents = len(env.agents)//2
 
-replay_buffer = ReplayBufferGRU(replay_buffer_size)
+# replay_buffer = ReplayBuffer(replay_buffer_size)
 # learner = QMix_Trainer(
 #     replay_buffer=replay_buffer,
 #     n_agents=n_agents,
@@ -68,6 +69,7 @@ replay_buffer = ReplayBufferGRU(replay_buffer_size)
 #     lambda_reward=args.lambda_reward,
 # )
 
+replay_buffer = ReplayBufferGRU(replay_buffer_size)
 learner = RNN_Trainer(
     replay_buffer=replay_buffer,
     n_agents=n_agents,
@@ -131,8 +133,8 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
         
         # Lists to store episode data
         episode_observations = []
-        episode_states = []
-        episode_next_states = []
+        # episode_states = []
+        # episode_next_states = []
         episode_actions = []
         episode_rewards = []
         episode_next_observations = []
@@ -171,8 +173,8 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
             
             # Store transition
             episode_observations.append(observations)
-            episode_states.append(state)
-            episode_next_states.append(next_state)
+            # episode_states.append(state)
+            # episode_next_states.append(next_state)
             episode_actions.append(actions)
             episode_rewards.append(rewards)
             episode_next_observations.append(next_observations)
@@ -185,15 +187,25 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
         # print(np.stack(episode_next_states).shape) #(1000, 81, 845)
 
         # Push entire episode to replay buffer
-        episode_states = np.stack(episode_states)
-        episode_next_states = np.stack(episode_next_states)
+        # episode_states = np.stack(episode_states)
+        # episode_next_states = np.stack(episode_next_states)
+        # if len(episode_observations) > 0:
+        #     learner.push_replay_buffer(
+        #         ini_hidden_in=ini_hidden_in,
+        #         ini_hidden_out=ini_hidden_out,
+        #         episode_observation=episode_observations,
+        #         episode_state=episode_states,
+        #         episode_next_state=episode_next_states,
+        #         episode_action=episode_actions,
+        #         episode_reward=episode_rewards,
+        #         episode_next_observation=episode_next_observations
+        #     )
+        
         if len(episode_observations) > 0:
             learner.push_replay_buffer(
                 ini_hidden_in=ini_hidden_in,
                 ini_hidden_out=ini_hidden_out,
                 episode_observation=episode_observations,
-                episode_state=episode_states,
-                episode_next_state=episode_next_states,
                 episode_action=episode_actions,
                 episode_reward=episode_rewards,
                 episode_next_observation=episode_next_observations
