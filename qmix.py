@@ -379,7 +379,7 @@ class QMix_Trainer():
 
                 # 4. Tính reward và targets
                 reward_epoch, env_rewards, strategy_rewards = _calc_reward(reward, state, action, self.lambda_reward)
-                targets = self._build_td_lambda_targets(reward_epoch, target_qtot)
+                targets = self._build_td0_targets(reward_epoch, target_qtot)
 
                 # 5. Tính loss và update
                 loss = self.criterion(qtot, targets.detach())
@@ -412,6 +412,23 @@ class QMix_Trainer():
         # backwards recursive update of the "forward view"
         for t in range(ret.shape[1] - 2, -1, -1):
             ret[:, t] = td_lambda * gamma * ret[:, t+1] + (rewards[:, t] + (1 - td_lambda) * gamma * target_qs[:, t+1])
+        return ret
+
+    def _build_td0_targets(self, rewards, target_qs, gamma=0.99):
+        """
+        Tính toán target Q-values theo công thức Q-learning: Q(s,a) = r + γ max_a' Q(s',a')
+        
+        @params:
+            rewards: [#batch, #sequence, 1] - Phần thưởng tức thời
+            target_qs: [#batch, #sequence, 1] - Q values từ target network
+        @return:
+            ret: [#batch, #sequence, 1] - Target Q values
+        """
+        ret = target_qs.new_zeros(*target_qs.shape)
+        ret[:, -1] = rewards[:, -1]
+        # Q(s,a) = r + γ max_a' Q(s',a')
+        for t in range(ret.shape[1] - 2, -1, -1):
+            ret[:, t] = rewards[:, t] + gamma * target_qs[:, t+1]
         return ret
 
     def _update_targets(self):
