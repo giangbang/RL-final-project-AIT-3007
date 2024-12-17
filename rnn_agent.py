@@ -76,8 +76,7 @@ class RNN_Trainer():
                 target_max_qvals = target_agent_outs.max(dim=-1)[0]
 
                 # Tính reward và targets
-                reward_epoch, env_rewards, strategy_rewards = _calc_reward(reward, state, action, self.lambda_reward)
-                targets = self._build_td0_targets(reward_epoch, target_max_qvals.unsqueeze(-1)).squeeze(-1)
+                targets = self._build_td0_targets(reward, target_max_qvals)
 
                 # Tính loss và update
                 loss = self.criterion(chosen_action_qvals, targets.detach())
@@ -99,7 +98,7 @@ class RNN_Trainer():
         self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
         self.agent.epsilon = self.epsilon
 
-        return current_loss, reward_epoch.sum(dim=1)[0].cpu().item(), env_rewards.sum(dim=1)[0].cpu().item(), strategy_rewards.sum(dim=1)[0].cpu().item()
+        return current_loss, None, None, None
     
     def _build_td0_targets(self, rewards, target_qs, gamma=0.99):
         """
