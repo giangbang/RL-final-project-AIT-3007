@@ -48,7 +48,7 @@ class Normalizer:
             self.var = data['var']
             self.count = data['count']
 
-def process_batch(batchs):
+def process_batch(batchs, normalizer_obs_b: Normalizer=None, normalizer_obs_r: Normalizer=None, normalizer_state: Normalizer=None):
     # Initialize dictionaries to hold lists for each field
     batch_blue = {
         'obs': [],
@@ -88,10 +88,17 @@ def process_batch(batchs):
 
         for transition in episode:
             # Collect shared states
+            if normalizer_state is not None:
+                transition['state'] = normalizer_state.update_normalize(transition['state'])
+                transition['next_state'] = normalizer_state.update_normalize(transition['next_state'])
+
             states_episode.append(transition['state'])          # Shape: (45, 45, 5)
             next_states_episode.append(transition['next_state'])  # Shape: (45, 45, 5)
 
             # Collect data for the blue team
+            if normalizer_obs_b is not None:
+                transition['obs']['blue'] = normalizer_obs_b.update_normalize(transition['obs']['blue'])
+                transition['next_obs']['blue'] = normalizer_obs_b.update_normalize(transition['next_obs']['blue'])
             obs_blue_episode.append(transition['obs']['blue'])        # Shape: (transitions, N_blue, 13, 13, 5)
             actions_blue_episode.append(transition['actions']['blue'])   # Shape: (transitions, N_blue, )
             rewards_blue_episode.append(transition['rewards']['blue'])   # Shape: (trainsitions, 1,)
@@ -99,6 +106,9 @@ def process_batch(batchs):
             dones_blue_episode.append(transition['dones']['blue'])      # Shape: (transitions, 1, )
 
             # Collect data for the red team
+            if normalizer_obs_r is not None:
+                transition['obs']['red'] = normalizer_obs_r.update_normalize(transition['obs']['red'])
+                transition['next_obs']['red'] = normalizer_obs_r.update_normalize(transition['next_obs']['red'])
             obs_red_episode.append(transition['obs']['red'])
             actions_red_episode.append(transition['actions']['red'])
             rewards_red_episode.append(transition['rewards']['red'])
