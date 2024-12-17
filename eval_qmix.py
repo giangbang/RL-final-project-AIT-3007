@@ -47,8 +47,7 @@ def get_blue_policy(model_path, hidden_dim=64, hypernet_dim=128):
     learner.load_model(model_path, map_location=device)
     
     # Khởi tạo hidden state
-    hidden_states = torch.zeros(1, 1, hidden_dim).to(device)
-    agent_obs_dict = {}  # Dictionary để lưu observation của từng agent
+    hidden_states = {i: torch.zeros(1, 1, hidden_dim).to(device) for i in range(n_agents)}
     
     def policy(env, agent_id, obs):
         """
@@ -58,11 +57,10 @@ def get_blue_policy(model_path, hidden_dim=64, hypernet_dim=128):
         
         # Lưu observation vào dictionary
         agent_idx = int(agent_id.split("_")[1])
-        agent_obs_dict[agent_idx] = obs
 
-            
         # Get action từ model
-        action, hidden_states = learner.get_action(obs, hidden_states)
+        action, new_hidden = learner.get_action(obs, hidden_states[agent_idx])
+        hidden_states[agent_idx] = new_hidden
         
         # Trả về action cho agent hiện tại
         return action[0][0]

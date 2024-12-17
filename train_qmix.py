@@ -109,8 +109,8 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
             torch.cuda.empty_cache()
 
         # Initialize hidden states for all blue agents
-        hidden_states = torch.zeros(1, 1, n_agents, hidden_dim).to(device)
-        ini_hidden_states = hidden_states.clone()
+        hidden_out = torch.zeros(1, 1, n_agents, hidden_dim).to(device)
+        # hidden_in = hidden_out.clone()
         
         # Lists to store episode data
         episode_observations = []
@@ -124,6 +124,8 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
         dead_agents = []
         
         for step in range(max_steps):
+            hidden_in = hidden_out
+
             if all(env.truncations.values()):
                 print(step)
                 print("Environment truncated!!!")
@@ -135,7 +137,7 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
             observations = np.stack(observations) # [n_agents, obs_dim]
 
             # Get actions from RNNAgent
-            actions, hidden_states = learner.get_action(observations, hidden_states)
+            actions, hidden_out = learner.get_action(observations, hidden_in)
 
             # Execute actions and collect next states/rewards
             # Save dead agents after making actions
@@ -146,6 +148,10 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
             next_observations = np.stack(next_observations) # [n_agents, obs_dim]
             rewards = np.stack(rewards) # [n_agents]
 
+            if step == 0:   
+                ini_hidden_in = hidden_in
+                ini_hidden_out = hidden_out
+            
             # Store transition
             episode_observations.append(observations)
             episode_states.append(state)
@@ -166,8 +172,8 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
         episode_next_states = np.stack(episode_next_states)
         if len(episode_observations) > 0:
             learner.push_replay_buffer(
-                ini_hidden_in=ini_hidden_states,
-                ini_hidden_out=hidden_states,
+                ini_hidden_in=ini_hidden_in,
+                ini_hidden_out=ini_hidden_out,
                 episode_observation=episode_observations,
                 episode_state=episode_states,
                 episode_next_state=episode_next_states,
@@ -177,14 +183,14 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
             )
         
         # Clear unnecessary tensors
-        del hidden_states
+        del hidden_out
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
         # Training step
         if len(replay_buffer) >= batch_size:
             loss, target_reward, env_reward, strategy_reward = learner.update(batch_size)
-            replay_buffer.buffer = []
+            # replay_buffer.buffer = []
 
         # Save model periodically
         if episode % save_interval == 0:
