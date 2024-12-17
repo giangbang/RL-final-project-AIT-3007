@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-import numpy np
+import numpy as np
 import random
 from collections import deque
 from magent2.environments import battle_v4
