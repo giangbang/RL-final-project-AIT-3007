@@ -11,6 +11,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="QMIX training for MAgent2 battle environment")
 
     # Training hyperparameters
+    parser.add_argument("--seed", type=int, default=10,
+                        help="Random seed for reproducibility")
     parser.add_argument("--learning_rate", type=float, default=1e-3,
                         help="Learning rate for training")
     parser.add_argument("--batch_size", type=int, default=1,
@@ -44,6 +46,7 @@ if __name__ == "__main__":
     wandb.init(
         project="QMIX_Project_1",
         config={
+            "seed": args.seed,
             "learning_rate": args.learning_rate,
             "batch_size": args.batch_size,
             "gamma": args.gamma,
