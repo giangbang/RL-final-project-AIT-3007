@@ -68,7 +68,7 @@ if __name__ == "__main__":
     os.makedirs(vid_dir, exist_ok=True)
 
     # Load blue model
-    blue_network = load_model("blue.pt", env, "blue")
+    blue_network = load_model("blue_v2.pt", env, "blue")
 
     # Scenario 1: Blue vs Random
     record_video(
