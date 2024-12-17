@@ -26,3 +26,6 @@ wandb/
 exp_main/
 exp_main1/
 test/
+para/
+*fix.py
+model1/
