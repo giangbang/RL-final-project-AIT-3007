@@ -332,7 +332,7 @@ class QMix_Trainer():
         observation = np.array(observation)
         state = np.array(state)
         next_state = np.array(next_state)
-        next_observation = np.array(next_observation) 
+        next_observation = np.array(next_observation)
         action = np.array(action)
         reward = np.array(reward)
         
