@@ -22,6 +22,7 @@ parser.add_argument('--lambda_reward', type=float, default=0, help='Weight rewar
 parser.add_argument('--checkpoint', type=str, default=None, help='Path to checkpoint')
 parser.add_argument('--model_path', type=str, default='model/qmix', help='Path to save model')
 parser.add_argument('--red_pretrained', action='store_true', help='Use red.pt pretrained model')
+parser.add_argument('--clear_buffer', action='store_true', help='Clear Replay Buffer after update')
 
 args = parser.parse_args()
 
@@ -79,6 +80,8 @@ if args.red_pretrained:
         torch.load("red.pt", weights_only=True, map_location="cpu")
     )
     red_agent.to(device)
+
+clear_buffer = args.clear_buffer if args.clear_buffer else False
 
 def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=32, 
                     save_interval=100, model_path='model/qmix'):
@@ -190,7 +193,7 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
         # Training step
         if len(replay_buffer) >= batch_size:
             loss, target_reward, env_reward, strategy_reward = learner.update(batch_size)
-            # replay_buffer.buffer = []
+            if clear_buffer: replay_buffer.buffer = []
 
         # Save model periodically
         if episode % save_interval == 0:
