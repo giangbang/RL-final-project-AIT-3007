@@ -23,6 +23,7 @@ parser.add_argument('--lambda_reward', type=float, default=0, help='Weight rewar
 parser.add_argument('--checkpoint', type=str, default=None, help='Path to checkpoint')
 parser.add_argument('--model_path', type=str, default='model/qmix', help='Path to save model')
 parser.add_argument('--red_pretrained', action='store_true', help='Use red.pt pretrained model')
+parser.add_argument('--learning_rate', type=float, default=1e-3, help='Learning rate for optimizer')
 
 args = parser.parse_args()
 
@@ -60,7 +61,7 @@ replay_buffer = ReplayBufferGRU(replay_buffer_size)
 #     hidden_dim=hidden_dim,
 #     hypernet_dim=hypernet_dim,
 #     target_update_interval=target_update_interval,
-#     lr=1e-3,
+#     lr=args.learning_rate,
 #     epsilon_start=args.epsilon_start,
 #     epsilon_end=args.epsilon_end,
 #     epsilon_decay=args.epsilon_decay,
@@ -75,7 +76,7 @@ learner = RNN_Trainer(
     action_dim=action_dim,
     hidden_dim=hidden_dim,
     target_update_interval=target_update_interval,
-    lr=1e-3,
+    lr=args.learning_rate,
     epsilon_start=args.epsilon_start,
     epsilon_end=args.epsilon_end,
     epsilon_decay=args.epsilon_decay,
