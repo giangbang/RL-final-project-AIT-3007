@@ -216,6 +216,10 @@ def train(config):
         "episode": ep
         })
 
+        if (ep+1) % 50 == 0:
+            qmix_blue.update_target_hard()
+            qmix_red.update_target_hard()
+
         # Train QMIX
         # if len(rb) >= batch_size :
         #         # batch, ids, _ = rb.sample(batch_size)
