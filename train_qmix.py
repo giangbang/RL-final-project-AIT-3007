@@ -188,7 +188,7 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
             torch.cuda.empty_cache()
 
         # Training step
-        if episode > batch_size:
+        if episode + 1 > batch_size:
             loss, target_reward, env_reward, strategy_reward = learner.update(batch_size)
 
         # Save model periodically
