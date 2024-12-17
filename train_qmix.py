@@ -6,6 +6,7 @@ from magent2.environments import battle_v4
 from qmix import QMix_Trainer, ReplayBufferGRU, CNNFeatureExtractor
 from utils import get_all_states, make_action
 from torch_model import QNetwork
+from rnn_agent import RNN_Trainer
 
 # Thêm đoạn parse arguments trước khi định nghĩa các biến
 parser = argparse.ArgumentParser(description='Train QMIX agents')
@@ -49,15 +50,30 @@ action_shape = 1
 n_agents = len(env.agents)//2
 
 replay_buffer = ReplayBufferGRU(replay_buffer_size)
-learner = QMix_Trainer(
+# learner = QMix_Trainer(
+#     replay_buffer=replay_buffer,
+#     n_agents=n_agents,
+#     obs_dim=obs_dim,
+#     state_dim=state_dim,
+#     action_shape=action_shape,
+#     action_dim=action_dim,
+#     hidden_dim=hidden_dim,
+#     hypernet_dim=hypernet_dim,
+#     target_update_interval=target_update_interval,
+#     lr=1e-3,
+#     epsilon_start=args.epsilon_start,
+#     epsilon_end=args.epsilon_end,
+#     epsilon_decay=args.epsilon_decay,
+#     lambda_reward=args.lambda_reward,
+# )
+
+learner = RNN_Trainer(
     replay_buffer=replay_buffer,
     n_agents=n_agents,
     obs_dim=obs_dim,
-    state_dim=state_dim,
     action_shape=action_shape,
     action_dim=action_dim,
     hidden_dim=hidden_dim,
-    hypernet_dim=hypernet_dim,
     target_update_interval=target_update_interval,
     lr=1e-3,
     epsilon_start=args.epsilon_start,
@@ -96,8 +112,8 @@ def train_blue_qmix(env, learner, max_episodes=1000, max_steps=200, batch_size=3
     """
     learner.agent.train()
     learner.target_agent.train()
-    learner.mixer.train()
-    learner.target_mixer.train()
+    # learner.mixer.train()
+    # learner.target_mixer.train()
     loss, strategy_reward, env_reward, target_reward = None, None, None, None
     for episode in range(max_episodes):
         print(f"Start episode {episode} ----------------------")

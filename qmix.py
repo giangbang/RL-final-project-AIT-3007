@@ -176,22 +176,6 @@ class RNNAgent(nn.Module):
         state = torch.FloatTensor(state).unsqueeze(0).unsqueeze(0).to(device) # add #sequence and #batch: [[#batch, #sequence, n_agents, n_feature]]
         hidden_in = hidden_in.unsqueeze(1) # add #batch: [#batch, n_agents, hidden_dim]
         agent_outs, hidden_out = self.forward(state, hidden_in)  # agents_out: [#batch, #sequence, n_agents, action_shape, action_dim]; hidden_out same as hidden_in
-        # dist = Categorical(agent_outs)
-
-        # if np.random.rand() < self.epsilon:
-        #     # Random action
-        #     action = dist.sample().squeeze(0).squeeze(0).detach().cpu().numpy()  # squeeze the added #batch and #sequence dimension
-        # else:
-        #     # Greedy action
-        #     action = np.argmax(agent_outs.detach().cpu().numpy(), axis=-1).squeeze(0).squeeze(0)  # squeeze the added #batch and #sequence dimension
-
-        # # Clear unnecessary tensors
-        # del state, hidden_in, agent_outs, dist
-        # if torch.cuda.is_available():
-        #     torch.cuda.empty_cache()
-            
-        # return action, hidden_out  # [n_agents, action_shape]
-        
         agent_outs = agent_outs.squeeze(0).squeeze(0)  # Remove batch and sequence dims -> [n_agents, action_shape, action_dim]
         action = np.zeros((agent_outs.shape[0], agent_outs.shape[1]), dtype=np.int64)
         
