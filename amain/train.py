@@ -1,5 +1,5 @@
-from .utils.qmix import QMIX
-from rb import ReplayBuffer, PrioritizedReplayBuffer
+from utils.qmix import QMIX
+from utils.rb import ReplayBuffer, PrioritizedReplayBuffer
 import gc
 # from utils.normalization import Normalizer
 from magent2.environments import battle_v4
@@ -8,7 +8,7 @@ import torch
 import numpy as np
 import os
 import wandb
-from .utils.process import process_batch, Normalizer 
+from utils.process import process_batch, Normalizer 
 import random
 import numpy as np
 import torch
@@ -95,9 +95,9 @@ def train(config):
     )
 
     # Initialize replay buffer
-    field_names = ["obs", "actions", "rewards", "next_obs", "dones", "state", "next_state"]
+    field_names = ["obs", "actions", "rewards", "next_obs", "dones", "state", "next_state", "prev_actions"]
     
-    rb = PrioritizedReplayBuffer(memory_size=20, field_names=field_names)
+    rb = ReplayBuffer(memory_size=1, field_names=field_names)
 
     blue_agents = [agent for agent in env.agents if agent.startswith("blue")]
     red_agents = [agent for agent in env.agents if agent.startswith("red")]
@@ -107,7 +107,12 @@ def train(config):
     normalizer_obs_b = Normalizer(shape=obs_shape)
     normalizer_obs_r = Normalizer(shape=obs_shape)
     normalizer_state = Normalizer(shape=state_shape)
+
+    # a_ids = torch.tensor([i for i in range(num_blue_agents)], dtype=torch.long).to(device)
+
     for ep in range(num_episodes):
+        prev_actions = {"blue": np.zeros((81,)), "red": np.zeros((81,))}
+
         obs, _ = env.reset()
         # We will collect transitions after all blue agents have acted once (a "joint step")
         # the purpose of joint step is to collect joint transitions for QMIX training
@@ -126,13 +131,23 @@ def train(config):
         terminated = False
         episode = []
         count += 1
+        h_r = None
+        h_b = None
+        prev_actions_r = None
+        prev_actions_b = None
         if ep < 60:
             add_parameter_noise(qmix_blue.agent_q_network)
             add_parameter_noise(qmix_red.agent_q_network)
         while not terminated:
-            actions_blue = qmix_blue.select_actions(torch.from_numpy(obs_array_blue).to(device), epsilon=epsilon) # return shape: (N_agents,)
+            actions_blue, h_b = qmix_blue.select_actions(torch.from_numpy(obs_array_blue).to(device),
+                                                    prev_actions=prev_actions_r,agent_ids=None, 
+                                                    hidden=h_b,
+                                                    epsilon=epsilon) # return shape: (N_agents,)
 
-            actions_red= qmix_red.select_actions(torch.from_numpy(obs_array_red).to(device), epsilon=epsilon) # return shape: (N_agents,)
+            actions_red, h_r = qmix_red.select_actions(torch.from_numpy(obs_array_red).to(device),
+                                                    prev_actions=prev_actions_b,agent_ids=None,
+                                                    hidden=h_r,
+                                                  epsilon=epsilon) # return shape: (N_agents,)
 
             actions = {}
             for i, agent in enumerate(blue_agents):
@@ -182,7 +197,8 @@ def train(config):
                 "next_obs": next_obs_save,
                 "dones": dones,
                 "state": global_state,
-                "next_state": next_global_state
+                "next_state": next_global_state,
+                "prev_actions": prev_actions
             }
             episode.append(transition)
 
@@ -190,6 +206,9 @@ def train(config):
             obs_array_red = next_obs_array_red
             global_state = next_global_state
             terminated = done_all
+            prev_actions = actions
+            prev_actions_b = a_blue
+            prev_actions_r = a_red
 
             # # After episode, decay epsilon
             # epsilon = max(epsilon * epsilon_decay, epsilon_min)
@@ -204,8 +223,9 @@ def train(config):
         })
 
         # Train QMIX
-        if len(rb) >= batch_size and ep >= 13:
-                batch, ids = rb.sample(batch_size)
+        if len(rb) >= batch_size:
+                # batch, ids = rb.sample(batch_size)
+                batch = rb.sample(batch_size)
 
                 # batch['obs']: (B, transitions, N, 13, 13, 5)
                 # batch['actions']: (B, transitions,N)
@@ -224,20 +244,29 @@ def train(config):
                         "epsilon": epsilon,
                         "loss" : (loss_blue + loss_red)/2
                     })
+                loss_blue, p = qmix_blue.update(batch_blue, ep)
+                loss_red, p = qmix_red.update(batch_red, ep)
                 qmix_blue.update_target_soft(config.tau)
                 qmix_red.update_target_soft(config.tau)
-                priorities = [(a+b)/2 for a,b in zip(priorities_b, priorities_r)]
+                # priorities = [(a+b)/2 for a,b in zip(priorities_b, priorities_r)]
 
-                rb.update_priorities(ids, priorities)
+                # rb.update_priorities(ids, priorities)
 
-        if ((ep+1) % update_step) == 0:
-                save_path_blue = os.path.join("/kaggle/working/", f"qmix_blue_ep{ep}.pth")
-                save_path_red = os.path.join("/kaggle/working/", f"qmix_red_ep{ep}.pth")
+        if (ep+1) % update_step == 0:
+            qmix_blue.update_target_hard()
+            qmix_red.update_target_hard()
+             
+
+        if ((ep+1) % 100) == 0:
+                save_path_blue = "qmix_blue_ep{}.pth".format(ep)
+                save_path_red = "qmix_red_ep{}.pth".format(ep)
                 torch.save(qmix_blue.agent_q_network.state_dict(), save_path_blue)
                 torch.save(qmix_red.agent_q_network.state_dict(), save_path_red)
+                torch.save(qmix_blue.mixing_network.state_dict(), "mn_blue_ep{}.pth".format(ep))
+                torch.save(qmix_red.mixing_network.state_dict(), "mn_red_ep{}.pth".format(ep))
             # Check if the save time has passed
         elapsed_time = time.time() - start_time
-        if (save_time_seconds - elapsed_time) >= 100:
+        if (save_time_seconds - elapsed_time) <= 100:
             print(f"Saving model after {save_time_seconds / 3600} hours of training...")
             torch.save(qmix_blue.agent_q_network.state_dict(), 'aqn_model_bafter_2_hours.pth')
             torch.save(qmix_red.agent_q_network.state_dict(), 'aqn_model_rafter_2_hours.pth')
@@ -245,3 +274,6 @@ def train(config):
             torch.save(qmix_red.mixing_network.state_dict(), 'mn_model_rtarget_after_2_hours.pth')
             break  # Optionally, stop training after saving the model
     wandb.finish()
+    normalizer_obs_b.save("normalizer_obs_b.pkl")
+    normalizer_obs_r.save("normalizer_obs_r.pkl")
+    normalizer_state.save("normalizer_state.pkl")
