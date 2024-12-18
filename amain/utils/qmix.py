@@ -7,15 +7,15 @@ from typing import List
 from torch.nn import functional as F
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-# torch.set_float32_matmul_precision('medium')
+torch.set_float32_matmul_precision('medium')
 
 class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, stride=1, dilation=1, slope=0):
+    def __init__(self, in_channels, out_channels, stride=1, dilation=1):
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3,
                                stride=stride, dilation=dilation, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(out_channels)
-        self.leaky_relu = nn.LeakyReLU(slope, inplace=True)
+        self.leaky_relu = nn.ReLU(inplace=True)
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3,
                                stride=1, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(out_channels)
@@ -52,7 +52,7 @@ class ResidualFCBlock(nn.Module):
     def __init__(self, in_features, out_features, dropout=0.1, negative_slope=0):
         super(ResidualFCBlock, self).__init__()
         self.fc1 = nn.Linear(in_features, out_features)
-        self.leaky_relu = nn.LeakyReLU(negative_slope=negative_slope, inplace=True)
+        self.leaky_relu = nn.ReLU(inplace=True)
         self.dropout = nn.Dropout(dropout)
         self.fc2 = nn.Linear(out_features, out_features)
         
@@ -80,6 +80,19 @@ class ResidualFCBlock(nn.Module):
         out = self.leaky_relu(out)
         return out
 
+class DepthwiseSeparableConv(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=1):
+        super().__init__()
+        self.conv = nn.Sequential(
+            # Depthwise
+            nn.Conv2d(in_channels, in_channels, 3, stride, 1, groups=in_channels, bias=False),
+            # Pointwise
+            nn.Conv2d(in_channels, out_channels, 1, bias=False)
+        )
+    
+    def forward(self, x):
+        return self.conv(x)
+
 class AgentQNetwork(nn.Module):
     """
     Custom Q-Network for RL Agents without Pretrained Weights.
@@ -87,37 +100,50 @@ class AgentQNetwork(nn.Module):
     def __init__(self, num_actions=21, input_channels=5):
         super().__init__()
         
-        # Initial convolution layers
         self.input_conv = nn.Sequential(
-            nn.Conv2d(input_channels, 16, kernel_size=3, padding=1, bias=False),
+            # Initial feature extraction with depthwise separable conv
+            DepthwiseSeparableConv(input_channels, 16), 
             nn.BatchNorm2d(16),
-            nn.LeakyReLU(0, inplace=True),
-            ResidualBlock(16, 32),
-            ResidualBlock(32, 32),
-            ResidualBlock(32, 16),
+            nn.ReLU(inplace=True),
             ResidualBlock(16, 16),
-            nn.MaxPool2d(kernel_size=2, stride=2),  # Explicit Max Pooling
-            ResidualBlock(16, 32, stride=1),  # Adjust stride since pooling is handled
+            # First block: 16->32 channels with spatial reduction
+            ResidualBlock(16, 32, stride=2),  # Size reduction 13->7
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
             ResidualBlock(32, 32),
-            nn.MaxPool2d(kernel_size=2, stride=2),  # Another pooling layer
-            ResidualBlock(32, 64, stride=1),
+            # Second block: 32->48 channels with spatial reduction 
+            ResidualBlock(32, 64, stride=2),  # Size reduction 7->4
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
             ResidualBlock(64, 64),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            # ResidualBlock(64, 64, stride=1),
+            # Final block: efficient feature extraction
+            DepthwiseSeparableConv(64, 128, stride=2),  # Size reduction 4->2
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            ResidualBlock(128, 128),
+            DepthwiseSeparableConv(128, 128, stride=2),
+            nn.Flatten()  # Size reduction 2->1
         )
         # Calculate the flattened feature size
         # Assuming input image size is (C, H, W) = (5, 45, 45)
         # After two downsampling layers with stride=2: H and W become 11 (45/2 -> 22, then 11)
-        self.feature_dim = 64
-        
+
+        a_embed, id_embed = 32, 32
+        self.action_embed = nn.Embedding(21, a_embed) 
+        self.agent_id_embed = nn.Embedding(81, id_embed)
+
+        self.feature_dim = 128 + a_embed + id_embed
+        self.hidden_dim = 256
+
+        self.fc1 = nn.Linear(self.feature_dim, self.hidden_dim)         
+        self.rnn = nn.GRUCell(self.hidden_dim, 256)
+
         self.fc = nn.Sequential(
-            ResidualFCBlock(self.feature_dim, 256),
+            ResidualFCBlock(self.hidden_dim, 256),
             nn.Dropout(0.2),
-            ResidualFCBlock(256, 64),
+            ResidualFCBlock(256, 128),
             nn.Dropout(0.2),
-            ResidualFCBlock(64, 64),
-            nn.Dropout(0.2),
-            nn.Linear(64, num_actions)
+            nn.Linear(128, num_actions)
         )
         
         # Initialization for the final layer
@@ -134,8 +160,23 @@ class AgentQNetwork(nn.Module):
             elif isinstance(m, nn.Linear):
                 nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
                 nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.GRUCell):
+                nn.init.kaiming_normal_(m.weight_ih)
+                nn.init.kaiming_normal_(m.weight_hh)
+                nn.init.constant_(m.bias_ih, 0)
+                nn.init.constant_(m.bias_hh, 0)
+            elif isinstance(m, nn.Embedding):
+                nn.init.kaiming_normal_(m.weight)
 
-    def forward(self, x):
+    # create a zeros tensor in case previous actions is None
+    # and in case previous hidden state is None
+    def init_hidden(self):
+        # make hidden states on same device as model
+        return self.fc1.weight.new(1, self.hidden_dim).zero_().to(device)
+
+
+
+    def forward(self, x, a=None, id=None, hidden=None):
         """
         Forward pass for AgentQNetwork.
 
@@ -145,10 +186,29 @@ class AgentQNetwork(nn.Module):
         Returns:
             torch.Tensor: Q-values for each action with shape (batch_size, num_actions).
         """
-        x = self.input_conv(x)  # Shape: (batch_size, 256, 11, 11)
-        x = x.view(x.size(0), -1)  # Shape: (batch_size, 256*11*11)
-        q_values = self.fc(x)  # Shape: (batch_size, num_actions)
-        return q_values
+
+        if hidden is None:
+            hidden = self.init_hidden()
+        # Provide default embeddings if a or id is None
+        if a is not None:
+            a = self.action_embed(a)
+        else:
+            a = torch.zeros(x.size(0), device=x.device,dtype=torch.long)
+            a = self.action_embed(a)
+        
+        if id is not None:
+            id = self.agent_id_embed(id)
+        else:
+            id = torch.tensor([i for i in range(81)], device=x.device, dtype=torch.long)
+            id = self.agent_id_embed(id)
+        x = self.input_conv(x)  # Shape: (batch_size, 256)
+        x = x.view(x.size(0), -1)  # Shape:     (batch_size, 256)
+        # concatenate action embedding and state embedding
+        x = torch.cat([x, a, id], dim=1)
+        x = self.fc1(x) # Shape: (batch_size, 256+30+30)
+        h = self.rnn(x) # Shape: (batch_size, 256)
+        q_values = self.fc(h)  # Shape: (batch_size, num_actions)
+        return q_values, h
     
 # -------------------------
 # Mixing Network
@@ -169,55 +229,56 @@ class MixingNetwork(nn.Module):
         self.embed_dim = embed_dim
         self.use_attention = use_attention
 
-        # Simplified state encoder
         self.state_encoder = nn.Sequential(
-            nn.Conv2d(state_shape[2], 32, kernel_size=3, padding=1),
+            # Initial feature extraction
+            DepthwiseSeparableConv(state_shape[2], 8),
+            nn.BatchNorm2d(8),
+            nn.ReLU(inplace=True),
+            ResidualBlock(8, 8),
+            # Downsample 45->23
+            DepthwiseSeparableConv(8, 16, stride=2),
+            nn.BatchNorm2d(16),
+            nn.ReLU(inplace=True),
+            ResidualBlock(16, 16),
+            # Downsample 23->12
+            DepthwiseSeparableConv(16, 32, stride=2),
             nn.BatchNorm2d(32),
-            nn.ReLU(),
-            ResidualBlock(32, 32),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            ResidualBlock(32, 64, stride=2),
+            nn.ReLU(inplace=True),
+            ResidualBlock(32, 32),           
+
+            # Downsample 12->6
+            DepthwiseSeparableConv(32, 64, stride=2),
             nn.BatchNorm2d(64),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
             ResidualBlock(64, 64),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            ResidualBlock(64, 64, stride=2),
-            # ResidualBlock(64, 128, stride=2),  # Downsample
-            # nn.BatchNorm2d(128),
-            # nn.ReLU(),
-            # ResidualBlock(128, 128),
-            # nn.BatchNorm2d(128),
-            # nn.ReLU(),
-            # ResidualBlock(128, 256, stride=2),  # Downsample
-            # nn.BatchNorm2d(256),
-            # nn.ReLU(),
-            nn.AdaptiveAvgPool2d((1,1))  # Output: (batch_size, 64, 1, 1)
+            # Final reduction 6->1
+            nn.Conv2d(64, 128, kernel_size=6),
+            nn.ReLU(inplace=True),
+            nn.Flatten()
         )
-        self.state_dim = 64
+        self.state_dim = 128
 
         # Hypernetworks for weights
         self.hyper_w_1 = nn.Sequential(
             ResidualFCBlock(self.state_dim, embed_dim, negative_slope=0),
-            nn.ReLU(),
+            # nn.ReLU(inplace=True),
             nn.Linear(embed_dim, num_agents * embed_dim),
-            nn.ReLU()
+            nn.ReLU(inplace=True)
         )
         self.hyper_w_final = nn.Sequential(
             ResidualFCBlock(self.state_dim, embed_dim, negative_slope=0),
-            nn.ReLU(),
+            # nn.ReLU(inplace=    True),
             nn.Linear(embed_dim, embed_dim),
-            nn.ReLU()
+            nn.ReLU(inplace=True)
         )
 
         # Hypernetworks for biases
         self.hyper_b_1 = ResidualFCBlock(self.state_dim, embed_dim, negative_slope=0)
         self.hyper_b_final = nn.Sequential(
             ResidualFCBlock(self.state_dim, embed_dim,negative_slope=0),
-            nn.ReLU(),  
+            # nn.ReLU(inplace=True),  
             nn.Linear(embed_dim, 1),
-            nn.ReLU()
+            nn.ReLU(inplace=True)
         )
         
         # Optional attention mechanism
@@ -271,6 +332,7 @@ class MixingNetwork(nn.Module):
 
         q_tot = q_tot.view(batch_size, 1)  # (batch_size, 1)
         return q_tot
+        
 from typing import Dict, Tuple
 
 import numpy as np
@@ -308,13 +370,13 @@ class QMIX:
         self.target_mixing_network = MixingNetwork(num_agents, state_shape=state_shape).to(device)
         
         # Compile networks for potential speed-up (PyTorch 2.0+)
-        # try:
-        #     self.agent_q_network = torch.compile(self.agent_q_network)
-        #     self.mixing_network = torch.compile(self.mixing_network)
-        #     self.target_agent_q_network = torch.compile(self.target_agent_q_network)
-        #     self.target_mixing_network = torch.compile(self.target_mixing_network)
-        # except Exception as e:
-        #     print(f"Compilation failed: {e}. Using regular execution.")
+        try:
+            self.agent_q_network = torch.compile(self.agent_q_network)
+            self.mixing_network = torch.compile(self.mixing_network)
+            self.target_agent_q_network = torch.compile(self.target_agent_q_network)
+            self.target_mixing_network = torch.compile(self.target_mixing_network)
+        except Exception as e:
+            print(f"Compilation failed: {e}. Using regular execution.")
         # # If torch.compile fails (e.g., not using PyTorch 2.0), proceed without compiling
   
         self.update_target_hard()
@@ -337,7 +399,10 @@ class QMIX:
         # wandb.watch(self.agent_q_network, log_freq=100)
         # wandb.watch(self.mixing_network, log_freq=100)
 
-    def select_actions(self, obs: torch.Tensor,  epsilon: float = 0.1) -> Dict[str, int]:
+    def select_actions(self, obs: torch.Tensor, prev_actions: None, 
+                       agent_ids = None,
+                       hidden = None,
+                        epsilon: float = 0.1) -> Dict[str, int]:
         """
         Select actions using epsilon-greedy policy.
 
@@ -353,8 +418,10 @@ class QMIX:
         N, H, W, C = obs.shape
         obs = obs.view(N,C,H,W).contiguous()
         obs = obs.float().to(self.device)  # Shape: (1, 1, N_agents, C, H, W)
+        if prev_actions is not None:
+            prev_actions = torch.tensor(prev_actions, dtype=torch.long).to(self.device)  # Shape: (1, 1, N_agents)
         with torch.no_grad():
-            q_values = self.agent_q_network(obs)  # Shape: (1, 1, N_agents, num_actions)
+            q_values, hidden = self.agent_q_network(obs, prev_actions, agent_ids, hidden)  # Shape: (1, 1, N_agents, num_actions)
         q_values = q_values.squeeze(0).squeeze(1)  # Shape: (N_agents, num_actions)
         q_values = q_values.cpu().numpy()
 
@@ -365,7 +432,10 @@ class QMIX:
             else:
                 action = np.argmax(q_values[i]).astype(np.uint16)
             actions[agent] = action
-        return actions
+            # check if observation is padded observation ( all zeros) set action equal to 0
+            if torch.sum(obs) == 0:
+                actions[agent] = 0
+        return actions, hidden
     
     def update(self, batch: Dict[str, np.ndarray], ep: int) -> float:
         self.agent_q_network.train()
@@ -391,98 +461,104 @@ class QMIX:
         state = torch.tensor(batch['state'], dtype=torch.float32)         # (B, T, H_s, W_s, C_s)
         next_state = torch.tensor(batch['next_state'], dtype=torch.float32)  # Same shape as state
         dones = torch.tensor(batch['dones'], dtype=torch.int64)            # (B, T,)
+        prev_actions = torch.tensor(batch['prev_actions'], dtype=torch.int64)  # (B, T, N)
 
         B, T = obs.shape[0], obs.shape[1]
 
         # Determine the number of sub-batches
-        sub_batch_size = self.sub_batch_size
-        num_sub_batches = (T + sub_batch_size - 1) // sub_batch_size  # Ceiling division
+        # sub_batch_size = self.sub_batch_size
+        # num_sub_batches = (T + sub_batch_size - 1) // sub_batch_size  # Ceiling division
 
         total_loss = 0.0
         priorities = []
-        for i in range(B):
+        agent_ids = torch.tensor([i for i in range(81)]).to(self.device)
+        # agent_ids = agent_ids.view(1, 81).expand(B, 81).view(-1).to(device)
+        hidden = None
+        hidden_target = None
+        for i in range(T):
             # Process each episode individually
             loss_prio = 0
-            for sb in range(num_sub_batches):
-                start = sb * sub_batch_size
-                end = min((sb + 1) * sub_batch_size, T)
+            # for sb in range(num_sub_batches):
+            #     start = sb * sub_batch_size
+            #     end = min((sb + 1) * sub_batch_size, T)
 
-                # Extract sub-batch for the current episode
-                obs_sb = obs[i, start:end].to(self.device)             # Shape: (sb_size, N, H, W, C)
-                actions_sb = actions[i, start:end].to(self.device)      # Shape: (sb_size, N)
-                rewards_sb = rewards[i, start:end].to(self.device)      # Shape: (sb_size,)
-                next_obs_sb = next_obs[i, start:end].to(self.device)    # Shape: (sb_size, N, H, W, C)
-                state_sb = state[i, start:end].to(self.device)          # Shape: (sb_size, H_s, W_s, C_s)
-                next_state_sb = next_state[i, start:end].to(self.device)  # Shape: (sb_size, H_s, W_s, C_s)
-                dones_sb = dones[i, start:end].to(self.device)          # Shape: (sb_size,)
+            # Extract sub-batch for the current episode
+            obs_sb = obs[:,i].to(self.device)            # Shape: (sb_size, N, H, W, C)
+            actions_sb = actions[:, i].to(self.device)      # Shape: (sb_size, N)
+            rewards_sb = rewards[:, i].to(self.device)      # Shape: (sb_size,)
+            next_obs_sb = next_obs[:,i ].to(self.device)    # Shape: (sb_size, N, H, W, C)
+            state_sb = state[:, i].to(self.device)          # Shape: (sb_size, H_s, W_s, C_s)
+            next_state_sb = next_state[:, i].to(self.device)  # Shape: (sb_size, H_s, W_s, C_s)
+            dones_sb = dones[:, i].to(self.device)          # Shape: (sb_size,)
+            prev_actions_sb = prev_actions[:, i].to(self.device)  # Shape: (sb_size, N)
 
-                # Permute dimensions if necessary (e.g., from (sb_size, N, H, W, C) to (sb_size, N, C, H, W))
-                obs_sb = obs_sb.permute(0, 1, 4, 2, 3).contiguous()        # Shape: (sb_size, N, C, H, W)
-                next_obs_sb = next_obs_sb.permute(0, 1, 4, 2, 3).contiguous()
+            # Permute dimensions if necessary (e.g., from (sb_size, N, H, W, C) to (sb_size, N, C, H, W))
+            obs_sb = obs_sb.permute(0, 1, 4, 2, 3).contiguous()        # Shape: (sb_size, N, C, H, W)
+            next_obs_sb = next_obs_sb.permute(0, 1, 4, 2, 3).contiguous()
 
-                # Flatten batch and agent dimensions for processing
-                sb_size, N_agents = obs_sb.shape[0], obs_sb.shape[1]
-                obs_sb_flat = obs_sb.view(-1, *obs_sb.shape[2:]).contiguous()          # Shape: (sb_size * N, C, H, W)
-                actions_sb_flat = actions_sb.view(-1).contiguous()                     # Shape: (sb_size * N)
-                next_obs_sb_flat = next_obs_sb.view(-1, *next_obs_sb.shape[2:]).contiguous()  # Shape: (sb_size * N, C, H, W)
+            # Flatten batch and agent dimensions for processing
+            sb_size, N_agents = obs_sb.shape[0], obs_sb.shape[1]
+            obs_sb_flat = obs_sb.view(-1, *obs_sb.shape[2:]).contiguous()          # Shape: (sb_size * N, C, H, W)
+            actions_sb_flat = actions_sb.view(-1).contiguous()                     # Shape: (sb_size * N)
+            next_obs_sb_flat = next_obs_sb.view(-1, *next_obs_sb.shape[2:]).contiguous()  # Shape: (sb_size * N, C, H, W)
+            prev_actions_sb_flat = prev_actions_sb.view(-1).contiguous()  # Shape: (sb_size * N)
 
-                # Compute current Q-values
-                q_values = self.agent_q_network(obs_sb_flat)              # Shape: (sb_size * N, num_actions)
-                chosen_actions = actions_sb_flat.unsqueeze(1)             # Shape: (sb_size * N, 1)
-                chosen_q_values = q_values.gather(1, chosen_actions).squeeze(1)  # Shape: (sb_size * N)
-                chosen_q_values = chosen_q_values.view(sb_size, N_agents)  # Shape: (sb_size, N)
+            # Compute current Q-values
+            q_values, hidden = self.agent_q_network(obs_sb_flat, prev_actions_sb_flat,  hidden=hidden)              # Shape: (sb_size * N, num_actions)
+            chosen_actions = actions_sb_flat.unsqueeze(1)             # Shape: (sb_size * N, 1)
+            chosen_q_values = q_values.gather(1, chosen_actions).squeeze(1)  # Shape: (sb_size * N)
+            chosen_q_values = chosen_q_values.view(sb_size, N_agents)  # Shape: (sb_size, N)
 
-                # entropy regularization
-                entropy = -torch.sum(F.softmax(q_values, dim=1) * F.log_softmax(q_values, dim=1), dim=1).mean() # (sb_size * N)
+            # entropy regularization
+            entropy = -torch.sum(F.softmax(q_values, dim=1) * F.log_softmax(q_values, dim=1), dim=1).mean() # (sb_size * N)
 
-               # Compute Double Q-learning targets
-                with torch.no_grad():
-                    target_q_values = self.target_agent_q_network(next_obs_sb_flat)  # (sb_size*N, num_actions)
-                    _, max_actions = target_q_values.max(dim=1)  # (sb_size*N,)
-                    max_target_q_values = target_q_values.gather(1, max_actions.unsqueeze(1)).squeeze(1)  # (sb_size*N,)
-                    max_target_q_values = max_target_q_values.view(sb_size, N_agents)  # (B*T, N)
-
-
-                state_sb = state_sb.permute(0, 3, 1, 2).contiguous()  # Shape: (sb_size, C_s, H_s, W_s)
-                next_state_sb = next_state_sb.permute(0, 3, 1, 2).contiguous()
-                
-                # Compute Q_tot and target Q_tot
-
-                q_tot = self.mixing_network(chosen_q_values, state_sb)  # Shape: (sb_size, 1)
-                q_tot = q_tot.squeeze(1)  # Shape: (sb_size,)
-
-                with torch.no_grad():
-                    target_q_tot = self.target_mixing_network(max_target_q_values, next_state_sb)  # Shape: (sb_size, 1)
-                    # Compute targets
-                    target_q_tot = target_q_tot.squeeze(1)  # Shape: (sb_size,)
-                    targets = rewards_sb + self.gamma * (1 - dones_sb) * target_q_tot  # Shape: (sb_size, 1)
-
-                # Compute loss
-                loss = self.loss_fn(q_tot, targets.detach()) - 0.01 * entropy
-                total_loss += loss.item()
-                loss_prio += loss.item()
-                # Backpropagation and optimization
-                # self.optimizer.zero_grad()
-                loss.backward()
-
-                # Gradient clipping
-                nn.utils.clip_grad_norm_(self.agent_q_network.parameters(), max_norm=1.0)
-                nn.utils.clip_grad_norm_(self.mixing_network.parameters(), max_norm=1.0)
-
-                self.optimizer.step()
-                self.scheduler.step()
-                self.optimizer.zero_grad(set_to_none=True)
+        # Compute Double Q-learning targets
+            with torch.no_grad():
+                target_q_values, hidden_target = self.target_agent_q_network(next_obs_sb_flat, actions_sb_flat, hidden=hidden_target)  # (sb_size*N, num_actions)
+                _, max_actions = target_q_values.max(dim=1)  # (sb_size*N,)
+                max_target_q_values = target_q_values.gather(1, max_actions.unsqueeze(1)).squeeze(1)  # (sb_size*N,)
+                max_target_q_values = max_target_q_values.view(sb_size, N_agents)  # (B*T, N)
 
 
-                # Free up GPU memory
-                del obs_sb, actions_sb, rewards_sb, next_obs_sb, state_sb, next_state_sb, dones_sb
-                del obs_sb_flat, actions_sb_flat, next_obs_sb_flat
-                # torch.cuda.empty_cache()
+            state_sb = state_sb.permute(0, 3, 1, 2).contiguous()  # Shape: (sb_size, C_s, H_s, W_s)
+            next_state_sb = next_state_sb.permute(0, 3, 1, 2).contiguous()
+            
+            # Compute Q_tot and target Q_tot
+
+            q_tot = self.mixing_network(chosen_q_values, state_sb)  # Shape: (sb_size, 1)
+            q_tot = q_tot.squeeze(1)  # Shape: (sb_size,)
+
+            with torch.no_grad():
+                target_q_tot = self.target_mixing_network(max_target_q_values, next_state_sb)  # Shape: (sb_size, 1)
+                # Compute targets
+                target_q_tot = target_q_tot.squeeze(1)  # Shape: (sb_size,)
+                targets = rewards_sb + self.gamma * (1 - dones_sb) * target_q_tot  # Shape: (sb_size, 1)
+
+            # Compute loss
+            loss = self.loss_fn(q_tot, targets.detach()) - 0.01 * entropy
+            total_loss += loss.item()
+            loss_prio += loss.item()
+            # Backpropagation and optimization
+            # self.optimizer.zero_grad()
+            loss.backward()
+
+            # Gradient clipping
+            nn.utils.clip_grad_norm_(self.agent_q_network.parameters(), max_norm=1.0)
+            nn.utils.clip_grad_norm_(self.mixing_network.parameters(), max_norm=1.0)
+
+            self.optimizer.step()
+            self.scheduler.step()
+            self.optimizer.zero_grad(set_to_none=True)
+
+
+            # Free up GPU memory
+            del obs_sb, actions_sb, rewards_sb, next_obs_sb, state_sb, next_state_sb, dones_sb
+            del obs_sb_flat, actions_sb_flat, next_obs_sb_flat
+            # torch.cuda.empty_cache()
             priorities.append(loss_prio)
         self.scheduler1.step()
         # Return the average loss over all sub-batches
-        average_loss = total_loss / (B * num_sub_batches)
-        return average_loss, priorities
+        return total_loss, priorities
 
     def update_target_hard(self):
         """
@@ -518,9 +594,12 @@ if __name__ == "__main__":
     qmix = QMIX(num_agents=num_agents, state_shape=state_shape, agent_ids=agent_ids, num_actions=num_actions, device=device)
     print(f"Total number of parameters: {qmix.num_params()})")
     input = torch.randn(81, 5, 13, 13)
+    actions = torch.randint(0, 20, (81,))
+    agent_ids = torch.tensor([i for i in range(81)])
     aqn = AgentQNetwork(num_actions=num_actions)
-    print(aqn(input).shape)
+    # print(aqn(input).shape)
     mn = MixingNetwork(num_agents=num_agents, state_shape=state_shape)
     agent_qs = torch.randn(1, 81)
     state = torch.randn(1, 5, 45, 45)
     print(mn(agent_qs, state).shape)
+    a = aqn(input ,actions, agent_ids)
