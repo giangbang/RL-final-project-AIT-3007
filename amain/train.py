@@ -1,7 +1,7 @@
 from utils.qmix import QMIX
 from tensordict.tensordict import TensorDict
 import tempfile
-from utils.rb import ReplayBuffer, PrioritizedReplayBuffer
+# from utils.rb import ReplayBuffer, PrioritizedReplayBuffer
 from torchrl.data import TensorDictReplayBuffer, SamplerWithoutReplacement, LazyMemmapStorage
 import gc
 # from utils.normalization import Normalizer
@@ -90,10 +90,10 @@ def train(config):
     )
 
     # Initialize replay buffer
-    field_names = ["obs", "actions", "rewards", "next_obs", "dones", "state", "next_state", "prev_actions"]
+    # field_names = ["obs", "actions", "rewards", "next_obs", "dones", "state", "next_state", "prev_actions"]
 
-    buffer_size = 130
-    tempdir = tempfile.TemporaryDirectory()
+    buffer_size = 120
+    tempdir = tempfile.TemporaryDirectory(dir="/home/trnmah/284-home/tmp")
     replay_buffer = TensorDictReplayBuffer(
         storage=LazyMemmapStorage(buffer_size, scratch_dir=tempdir.name),
         sampler=SamplerWithoutReplacement(),
@@ -107,8 +107,11 @@ def train(config):
     state_shape = (45,45,5)
     count = 0
     normalizer_obs_b = Normalizer(shape=obs_shape)
+    normalizer_obs_b.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/amain/norm/normalizer_obs_b299.pkl")
     normalizer_obs_r = Normalizer(shape=obs_shape)
+    normalizer_obs_r.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/amain/norm/normalizer_obs_r299.pkl")
     normalizer_state = Normalizer(shape=state_shape)
+    normalizer_state.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/amain/norm/normalizer_state299.pkl")
 
     # a_ids = torch.tensor([i for i in range(num_blue_agents)], dtype=torch.long).to(device)
 
@@ -256,7 +259,7 @@ def train(config):
         gc.collect()
 
         # Train QMIX
-        if len(replay_buffer) >= batch_size and ep >= 20:
+        if len(replay_buffer) >= batch_size and ep >= 4:
                 # batch, ids = rb.sample(batch_size)
                 batch = replay_buffer.sample(batch_size)
                 batch = batch.to(device)
@@ -297,6 +300,9 @@ def train(config):
                 torch.save(qmix_red.agent_q_network.state_dict(), save_path_red)
                 torch.save(qmix_blue.mixing_network.state_dict(), "mn_blue_ep{}.pth".format(ep))
                 torch.save(qmix_red.mixing_network.state_dict(), "mn_red_ep{}.pth".format(ep))
+                normalizer_obs_b.save("normalizer_obs_b{}.pkl".format(ep))
+                normalizer_obs_r.save("normalizer_obs_r.pkl".format(ep))
+                normalizer_state.save("normalizer_state.pkl".format(ep))
             # Check if the save time has passed
         elapsed_time = time.time() - start_time
         if (save_time_seconds - elapsed_time) <= 100:
