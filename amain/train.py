@@ -1,5 +1,8 @@
 from utils.qmix import QMIX
+from tensordict.tensordict import TensorDict
+import tempfile
 from utils.rb import ReplayBuffer, PrioritizedReplayBuffer
+from torchrl.data import TensorDictReplayBuffer, SamplerWithoutReplacement, LazyMemmapStorage
 import gc
 # from utils.normalization import Normalizer
 from magent2.environments import battle_v4
@@ -8,7 +11,7 @@ import torch
 import numpy as np
 import os
 import wandb
-from utils.process import process_batch, Normalizer 
+from utils.process import process_batch, Normalizer, collate_episodes, process_episodes
 import random
 import numpy as np
 import torch
@@ -23,14 +26,6 @@ def set_seed(seed: int):
     torch.cuda.manual_seed_all(seed)  # if using multi-GPU
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-
-# def normalize_data( data):
-#     # data shape : (H, W, C)
-#     mean = np.mean(data, axis=(0, 1))
-#     std = np.std(data, axis=(0, 1))
-#     # I want to take care situation where std is 0
-#     return (data - mean) / (std + 1e-8)
-# File: [amain/train.py](amain/train.py)
 
 def add_parameter_noise(model, stddev=0.004):
     """Adds parameter-space noise to a model."""
@@ -57,11 +52,11 @@ def train(config):
     sub_bs = config.sub_bs
     num_envs = 2 
     # env = battle_v4.parallel_env(map_size=30, minimap_mode=False, max_cycles=300, seed=10)
-    env = battle_v4.parallel_env(map_size=45, minimap_mode=False, step_reward=-0.008,
-            dead_penalty=-0.2, attack_penalty=-0.1, attack_opponent_reward=0.8, max_cycles=320, 
+    env = battle_v4.parallel_env(map_size=45, minimap_mode=False, step_reward=-0.01,
+            dead_penalty=-0.2, attack_penalty=-0.1, attack_opponent_reward=1, max_cycles=310, 
             extra_features=False)
     env = ss.black_death_v3(env)
-
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     env.reset()
     blue_agents = [agent for agent in env.possible_agents if agent.startswith("blue_")]
     num_blue_agents = len(blue_agents)
@@ -96,8 +91,15 @@ def train(config):
 
     # Initialize replay buffer
     field_names = ["obs", "actions", "rewards", "next_obs", "dones", "state", "next_state", "prev_actions"]
-    
-    rb = ReplayBuffer(memory_size=1, field_names=field_names)
+
+    buffer_size = 130
+    tempdir = tempfile.TemporaryDirectory()
+    replay_buffer = TensorDictReplayBuffer(
+        storage=LazyMemmapStorage(buffer_size, scratch_dir=tempdir.name),
+        sampler=SamplerWithoutReplacement(),
+        batch_size=batch_size,
+    )
+
 
     blue_agents = [agent for agent in env.agents if agent.startswith("blue")]
     red_agents = [agent for agent in env.agents if agent.startswith("red")]
@@ -111,7 +113,7 @@ def train(config):
     # a_ids = torch.tensor([i for i in range(num_blue_agents)], dtype=torch.long).to(device)
 
     for ep in range(num_episodes):
-        prev_actions = {"blue": np.zeros((81,)), "red": np.zeros((81,))}
+        prev_actions = {"b": np.zeros((81,)), "r": np.zeros((81,))}
 
         obs, _ = env.reset()
         # We will collect transitions after all blue agents have acted once (a "joint step")
@@ -129,15 +131,15 @@ def train(config):
         episode_reward_red = 0
 
         terminated = False
-        episode = []
+        episode_transitions = []
         count += 1
         h_r = None
         h_b = None
-        prev_actions_r = None
-        prev_actions_b = None
-        if ep < 60:
-            add_parameter_noise(qmix_blue.agent_q_network)
-            add_parameter_noise(qmix_red.agent_q_network)
+        prev_actions_r = np.zeros((81,), dtype=np.int64)
+        prev_actions_b = np.zeros((81,), dtype=np.int64)
+        # if ep > 100 and ep < 250:
+        #     add_parameter_noise(qmix_blue.agent_q_network)
+        #     add_parameter_noise(qmix_red.agent_q_network)
         while not terminated:
             actions_blue, h_b = qmix_blue.select_actions(torch.from_numpy(obs_array_blue).to(device),
                                                     prev_actions=prev_actions_r,agent_ids=None, 
@@ -181,26 +183,33 @@ def train(config):
             next_obs_array_red = np.stack([next_obs[a] for a in red_agents], axis=0, dtype=np.float32)
             next_obs_array_red = normalizer_obs_r.update_normalize(next_obs_array_red)
 
-            obs_save = {"blue": obs_array_blue, "red": obs_array_red} # obs_array_blue: (81, 13, 13, 5)
-            reward_save = {"blue": reward_blue, "red": reward_red} # reward_blue: (1,)
-            next_obs_save = {"blue": next_obs_array_red, "red": next_obs_array_red} # (81, 13, 13, 5)
+            # obs_save = {"blue": obs_array_blue, "red": obs_array_red} # obs_array_blue: (81, 13, 13, 5)
+            # reward_save = {"blue": reward_blue, "red": reward_red} # reward_blue: (1,)
+            # next_obs_save = {"blue": next_obs_array_red, "red": next_obs_array_red} # (81, 13, 13, 5)
 
-            actions = {"blue": a_blue, "red": a_red} # actions_blue: (81,)
-            dones = {"blue": done_all, "red": done_all} # done_all: bool
-            global_state = np.array(global_state)
+            # actions = {"blue": a_blue, "red": a_red} # actions_blue: (81,)
+            # dones = {"blue": done_all, "red": done_all} # done_all: bool
+            # global_state = np.array(global_state)
 
 
+            # Store transition in a list for the current episode
             transition = {
-                "obs": obs_save,
-                "actions": actions,
-                "rewards": reward_save,
-                "next_obs": next_obs_save,
-                "dones": dones,
-                "state": global_state,
-                "next_state": next_global_state,
-                "prev_actions": prev_actions
+                "o_b": torch.from_numpy(obs_array_blue).float(),
+                "o_r": torch.from_numpy(obs_array_red).float(),
+                "a_b": torch.from_numpy(a_blue).long(),
+                "a_r": torch.from_numpy(a_red).long(),
+                "r_b": torch.tensor(reward_blue, dtype=torch.float32),
+                "r_r": torch.tensor(reward_red, dtype=torch.float32),
+                "n_o_b": torch.from_numpy(next_obs_array_blue).float(),
+                "n_o_r": torch.from_numpy(next_obs_array_red).float(),
+                "do": torch.tensor(done_all, dtype=torch.int64),
+                "s": torch.from_numpy(global_state).float(),
+                "n_s": torch.from_numpy(next_global_state).float(),
+                "p_a_b": torch.from_numpy(prev_actions_b).long() ,
+                "p_a_r": torch.from_numpy(prev_actions_r).long(),
+                "index": torch.tensor(ep+1, dtype=torch.int64)  # Add episode_id
             }
-            episode.append(transition)
+            episode_transitions.append(transition)
 
             obs_array_blue = next_obs_array_blue
             obs_array_red = next_obs_array_red
@@ -214,19 +223,44 @@ def train(config):
             # epsilon = max(epsilon * epsilon_decay, epsilon_min)
 
         epsilon = max(epsilon * epsilon_decay, epsilon_min)
-        # Save episode to replay buffer
-        rb.save_episode(episode)
         wandb.log({
         "episode_reward_blue": episode_reward_blue,
         "episode_reward_red": episode_reward_red,
         "episode": ep
         })
+        # Save episode to replay buffer
+                # After episode completion, convert transitions to TensorDict
+        episode_tensordict = {}
+        keys = episode_transitions[0].keys()
+        for key in keys:
+            # Collect all steps for this key
+            key_data = [transition[key] for transition in episode_transitions]
+            # Stack along time dimension
+            if key == "episode_id":
+                # Since episode_id is the same for all steps, take the first one
+                stacked = key_data[0]  # Shape: [1]
+            else:
+                stacked = torch.stack(key_data, dim=0)  # Shape: [episode_length, ...]
+            episode_tensordict[key] = stacked.unsqueeze(0)  # Shape: [1, episode_length, ...]
+
+        # Create a TensorDict with a batch size of 1 (single trajectory)
+        episode_tensordict = TensorDict(episode_tensordict, batch_size=[1])
+        episode_tensordict = collate_episodes(episode_tensordict, device)
+        # Increment episode_id_counter for the next episode
+        # episode_id_counter += 1
+
+        # Push the episode TensorDict to the replay buffer
+        replay_buffer.extend(episode_tensordict)
+
+        del episode_transitions
+        gc.collect()
 
         # Train QMIX
-        if len(rb) >= batch_size:
+        if len(replay_buffer) >= batch_size and ep >= 20:
                 # batch, ids = rb.sample(batch_size)
-                batch = rb.sample(batch_size)
-
+                batch = replay_buffer.sample(batch_size)
+                batch = batch.to(device)
+                batch_blue, batch_red = process_episodes(batch)
                 # batch['obs']: (B, transitions, N, 13, 13, 5)
                 # batch['actions']: (B, transitions,N)
                 # batch['rewards']: (B, transitions, )
@@ -234,7 +268,7 @@ def train(config):
                 # batch['state']: (B, transitions, 45, 45, 5)
                 # batch['next_state']: (B, transitions, 45, 45, 5)
                 # batch['dones']: (B, transitions, )
-                batch_blue, batch_red = process_batch(batch, normalizer_obs_b=normalizer_obs_b, normalizer_obs_r=normalizer_obs_r, normalizer_state=normalizer_state)
+                # batch_blue, batch_red = process_batch(batch, normalizer_obs_b=normalizer_obs_b, normalizer_obs_r=normalizer_obs_r, normalizer_state=normalizer_state)
                 loss_blue, priorities_b = qmix_blue.update(batch_blue, ep)
                 loss_red, priorities_r = qmix_red.update(batch_red,ep)
 
@@ -244,8 +278,7 @@ def train(config):
                         "epsilon": epsilon,
                         "loss" : (loss_blue + loss_red)/2
                     })
-                loss_blue, p = qmix_blue.update(batch_blue, ep)
-                loss_red, p = qmix_red.update(batch_red, ep)
+
                 qmix_blue.update_target_soft(config.tau)
                 qmix_red.update_target_soft(config.tau)
                 # priorities = [(a+b)/2 for a,b in zip(priorities_b, priorities_r)]
@@ -257,7 +290,7 @@ def train(config):
             qmix_red.update_target_hard()
              
 
-        if ((ep+1) % 100) == 0:
+        if ((ep+1) % 50) == 0:
                 save_path_blue = "qmix_blue_ep{}.pth".format(ep)
                 save_path_red = "qmix_red_ep{}.pth".format(ep)
                 torch.save(qmix_blue.agent_q_network.state_dict(), save_path_blue)
@@ -268,6 +301,8 @@ def train(config):
         elapsed_time = time.time() - start_time
         if (save_time_seconds - elapsed_time) <= 100:
             print(f"Saving model after {save_time_seconds / 3600} hours of training...")
+            qmix_blue.update_target_hard()
+            qmix_red.update_target_hard()
             torch.save(qmix_blue.agent_q_network.state_dict(), 'aqn_model_bafter_2_hours.pth')
             torch.save(qmix_red.agent_q_network.state_dict(), 'aqn_model_rafter_2_hours.pth')
             torch.save(qmix_blue.mixing_network.state_dict(), 'mn_model_btarget_after_2_hours.pth')
