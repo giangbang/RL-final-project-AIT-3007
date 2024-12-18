@@ -29,3 +29,7 @@ test/
 para/
 *fix.py
 model1/
+norm/
+ippo.py
+ppo.py
+eval/
