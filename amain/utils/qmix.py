@@ -7,7 +7,7 @@ from typing import List
 from torch.nn import functional as F
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-torch.set_float32_matmul_precision('medium')
+# torch.set_float32_matmul_precision('medium')
 
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1, dilation=1):
@@ -108,13 +108,12 @@ class AgentQNetwork(nn.Module):
             ResidualBlock(16, 16),
             # First block: 16->32 channels with spatial reduction
             ResidualBlock(16, 32, stride=2),  # Size reduction 13->7
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
+            # nn.ReLU(inplace=True),
             ResidualBlock(32, 32),
             # Second block: 32->48 channels with spatial reduction 
             ResidualBlock(32, 64, stride=2),  # Size reduction 7->4
             nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
+            # nn.ReLU(inplace=True),
             ResidualBlock(64, 64),
             # Final block: efficient feature extraction
             DepthwiseSeparableConv(64, 128, stride=2),  # Size reduction 4->2
@@ -128,7 +127,7 @@ class AgentQNetwork(nn.Module):
         # Assuming input image size is (C, H, W) = (5, 45, 45)
         # After two downsampling layers with stride=2: H and W become 11 (45/2 -> 22, then 11)
 
-        a_embed, id_embed = 32, 32
+        a_embed, id_embed = 64, 64 
         self.action_embed = nn.Embedding(21, a_embed) 
         self.agent_id_embed = nn.Embedding(81, id_embed)
 
@@ -141,9 +140,9 @@ class AgentQNetwork(nn.Module):
         self.fc = nn.Sequential(
             ResidualFCBlock(self.hidden_dim, 256),
             nn.Dropout(0.2),
-            ResidualFCBlock(256, 128),
+            ResidualFCBlock(256, 256),
             nn.Dropout(0.2),
-            nn.Linear(128, num_actions)
+            nn.Linear(256, num_actions)
         )
         
         # Initialization for the final layer
@@ -172,7 +171,7 @@ class AgentQNetwork(nn.Module):
     # and in case previous hidden state is None
     def init_hidden(self):
         # make hidden states on same device as model
-        return self.fc1.weight.new(1, self.hidden_dim).zero_().to(device)
+        return torch.zeros(1, self.hidden_dim).to(device) # self.fc1.weight is used as a reference to the device
 
 
 
@@ -186,35 +185,56 @@ class AgentQNetwork(nn.Module):
         Returns:
             torch.Tensor: Q-values for each action with shape (batch_size, num_actions).
         """
+        x = x.to(device)
+        # find index of padded observation
+        original_x = x.clone()
+        original_x = original_x.view(original_x.size(0), -1).abs().sum(dim=1)
+        obs_mask = original_x == 0
 
-        if hidden is None:
-            hidden = self.init_hidden()
+
+        x = self.input_conv(x)  # Shape: (batch_size, 256)
+        x = x.view(x.size(0), -1)  # Shape:     (batch_size, 256)
         # Provide default embeddings if a or id is None
-        if a is not None:
+        if a is not None and isinstance(a, torch.Tensor):
+            a = a.to(device)
+            action_mask = (a == 0)
+            a = self.action_embed(a.long())
+        elif isinstance(a, np.ndarray):
+            a = torch.tensor(a, device=x.device, dtype=torch.long, requires_grad=False)
+            action_mask = (a == 0)
             a = self.action_embed(a)
         else:
-            a = torch.zeros(x.size(0), device=x.device,dtype=torch.long)
+            a = torch.zeros(x.size(0), device=x.device,dtype=torch.long, requires_grad=False)
+            action_mask = (a == 0)
             a = self.action_embed(a)
         
         if id is not None:
             id = self.agent_id_embed(id)
         else:
-            id = torch.tensor([i for i in range(81)], device=x.device, dtype=torch.long)
+            size = int(x.size(0)/81)
+            id = torch.tensor([[i for i in range(81)] for i in range(size)], device=x.device, dtype=torch.long, requires_grad=False)
             id = self.agent_id_embed(id)
-        x = self.input_conv(x)  # Shape: (batch_size, 256)
-        x = x.view(x.size(0), -1)  # Shape:     (batch_size, 256)
+            id = id.view(x.size(0), -1)
+        combined_mask = obs_mask & action_mask
+        if hidden is None:
+            hidden = self.init_hidden()
+            hidden = hidden.expand(x.size(0), -1).to(device)
+        hidden = hidden.detach()
         # concatenate action embedding and state embedding
         x = torch.cat([x, a, id], dim=1)
         x = self.fc1(x) # Shape: (batch_size, 256+30+30)
-        h = self.rnn(x) # Shape: (batch_size, 256)
+        h = self.rnn(x, hidden) # Shape: (batch_size, 256)
         q_values = self.fc(h)  # Shape: (batch_size, num_actions)
+
+        combined_mask = combined_mask.unsqueeze(1).expand(q_values.size())
+        q_values = q_values.masked_fill(combined_mask, 0.0)
         return q_values, h
     
 # -------------------------
 # Mixing Network
 # -------------------------
 class MixingNetwork(nn.Module):
-    def __init__(self, num_agents, state_shape=(45,45,5), embed_dim=64, use_attention=True):
+    def __init__(self, num_agents, state_shape=(45,45,5), embed_dim=128, use_attention=True):
         """
         Mixing network for QMIX with optional attention mechanism.
         
@@ -254,7 +274,8 @@ class MixingNetwork(nn.Module):
             # Final reduction 6->1
             nn.Conv2d(64, 128, kernel_size=6),
             nn.ReLU(inplace=True),
-            nn.Flatten()
+            nn.Flatten(),
+            # nn.ReLU(inplace=True)
         )
         self.state_dim = 128
 
@@ -370,13 +391,13 @@ class QMIX:
         self.target_mixing_network = MixingNetwork(num_agents, state_shape=state_shape).to(device)
         
         # Compile networks for potential speed-up (PyTorch 2.0+)
-        try:
-            self.agent_q_network = torch.compile(self.agent_q_network)
-            self.mixing_network = torch.compile(self.mixing_network)
-            self.target_agent_q_network = torch.compile(self.target_agent_q_network)
-            self.target_mixing_network = torch.compile(self.target_mixing_network)
-        except Exception as e:
-            print(f"Compilation failed: {e}. Using regular execution.")
+        # try:
+        #     self.agent_q_network = torch.compile(self.agent_q_network)
+        #     self.mixing_network = torch.compile(self.mixing_network)
+        #     self.target_agent_q_network = torch.compile(self.target_agent_q_network)
+        #     self.target_mixing_network = torch.compile(self.target_mixing_network)
+        # except Exception as e:
+        #     print(f"Compilation failed: {e}. Using regular execution.")
         # # If torch.compile fails (e.g., not using PyTorch 2.0), proceed without compiling
   
         self.update_target_hard()
@@ -391,7 +412,7 @@ class QMIX:
             self.optimizer, T_0=20, T_mult=2, eta_min=1e-6,
         )
         self.scheduler1 = optim.lr_scheduler.StepLR(
-            self.optimizer, step_size=10, gamma=0.8
+            self.optimizer, step_size=100, gamma=0.9
         )
 
         self.loss_fn = nn.SmoothL1Loss().to(device)
@@ -453,15 +474,24 @@ class QMIX:
             float: The computed loss value.
         """
 
-        # Convert batch data to tensors on CPU initially
-        obs = torch.tensor(batch['obs'], dtype=torch.float32)            # (B, T, N, H, W, C)
-        actions = torch.tensor(batch['actions'], dtype=torch.int64)        # (B, T, N)
-        rewards = torch.tensor(batch['rewards'], dtype=torch.float32)     # (B, T,)
-        next_obs = torch.tensor(batch['next_obs'], dtype=torch.float32)   # (B, T, N, H, W, C)
-        state = torch.tensor(batch['state'], dtype=torch.float32)         # (B, T, H_s, W_s, C_s)
-        next_state = torch.tensor(batch['next_state'], dtype=torch.float32)  # Same shape as state
-        dones = torch.tensor(batch['dones'], dtype=torch.int64)            # (B, T,)
-        prev_actions = torch.tensor(batch['prev_actions'], dtype=torch.int64)  # (B, T, N)
+        # # Convert batch data to tensors on CPU initially
+        # obs = torch.tensor(batch['o'], dtype=torch.float32)            # (B, T, N, H, W, C)
+        # actions = torch.tensor(batch['a'], dtype=torch.int64)        # (B, T, N)
+        # rewards = torch.tensor(batch['r'], dtype=torch.float32)     # (B, T,)
+        # next_obs = torch.tensor(batch['n_o'], dtype=torch.float32)   # (B, T, N, H, W, C)
+        # state = torch.tensor(batch['s'], dtype=torch.float32)         # (B, T, H_s, W_s, C_s)
+        # next_state = torch.tensor(batch['n_s'], dtype=torch.float32)  # Same shape as state
+        # dones = torch.tensor(batch['d'], dtype=torch.int64)            # (B, T,)
+        # prev_actions = torch.tensor(batch['p_a'], dtype=torch.int64)  # (B, T, N)
+        obs = batch['o']
+        actions = batch['a'].long()
+        rewards = batch['r']
+        next_obs = batch['n_o']
+        state = batch['s']
+        next_state = batch['n_s']
+        dones = batch['d']
+        prev_actions = batch['p_a'].long()
+
 
         B, T = obs.shape[0], obs.shape[1]
 
@@ -471,7 +501,6 @@ class QMIX:
 
         total_loss = 0.0
         priorities = []
-        agent_ids = torch.tensor([i for i in range(81)]).to(self.device)
         # agent_ids = agent_ids.view(1, 81).expand(B, 81).view(-1).to(device)
         hidden = None
         hidden_target = None
@@ -499,10 +528,11 @@ class QMIX:
             # Flatten batch and agent dimensions for processing
             sb_size, N_agents = obs_sb.shape[0], obs_sb.shape[1]
             obs_sb_flat = obs_sb.view(-1, *obs_sb.shape[2:]).contiguous()          # Shape: (sb_size * N, C, H, W)
-            actions_sb_flat = actions_sb.view(-1).contiguous()                     # Shape: (sb_size * N)
+            actions_sb_flat = actions_sb.contiguous().view(-1).contiguous()                     # Shape: (sb_size * N)
             next_obs_sb_flat = next_obs_sb.view(-1, *next_obs_sb.shape[2:]).contiguous()  # Shape: (sb_size * N, C, H, W)
-            prev_actions_sb_flat = prev_actions_sb.view(-1).contiguous()  # Shape: (sb_size * N)
+            prev_actions_sb_flat = prev_actions_sb.contiguous().view(-1).contiguous()  # Shape: (sb_size * N)
 
+            # with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
             # Compute current Q-values
             q_values, hidden = self.agent_q_network(obs_sb_flat, prev_actions_sb_flat,  hidden=hidden)              # Shape: (sb_size * N, num_actions)
             chosen_actions = actions_sb_flat.unsqueeze(1)             # Shape: (sb_size * N, 1)
@@ -535,9 +565,8 @@ class QMIX:
                 targets = rewards_sb + self.gamma * (1 - dones_sb) * target_q_tot  # Shape: (sb_size, 1)
 
             # Compute loss
-            loss = self.loss_fn(q_tot, targets.detach()) - 0.01 * entropy
-            total_loss += loss.item()
-            loss_prio += loss.item()
+            loss = self.loss_fn(q_tot, targets.detach()) - 0.03 * entropy
+            # loss_prio += loss.item()
             # Backpropagation and optimization
             # self.optimizer.zero_grad()
             loss.backward()
@@ -548,15 +577,16 @@ class QMIX:
 
             self.optimizer.step()
             self.scheduler.step()
-            self.optimizer.zero_grad(set_to_none=True)
+            self.optimizer.zero_grad()
 
-
+            total_loss += loss.item()
             # Free up GPU memory
             del obs_sb, actions_sb, rewards_sb, next_obs_sb, state_sb, next_state_sb, dones_sb
             del obs_sb_flat, actions_sb_flat, next_obs_sb_flat
             # torch.cuda.empty_cache()
             priorities.append(loss_prio)
-        self.scheduler1.step()
+
+            self.scheduler1.step()
         # Return the average loss over all sub-batches
         return total_loss, priorities
 
@@ -584,22 +614,22 @@ class QMIX:
         # calculate total paramater of AgentQNetwork and MixingNetwork
         return sum(p.numel() for p in self.agent_q_network.parameters()) + sum(p.numel() for p in self.mixing_network.parameters())
 
-if __name__ == "__main__":
-    # Test QMIX
-    num_agents = 81 
-    state_shape = (45, 45, 5)
-    agent_ids = [f"blue_{i}" for i in range(81)]
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    num_actions = 21
-    qmix = QMIX(num_agents=num_agents, state_shape=state_shape, agent_ids=agent_ids, num_actions=num_actions, device=device)
-    print(f"Total number of parameters: {qmix.num_params()})")
-    input = torch.randn(81, 5, 13, 13)
-    actions = torch.randint(0, 20, (81,))
-    agent_ids = torch.tensor([i for i in range(81)])
-    aqn = AgentQNetwork(num_actions=num_actions)
-    # print(aqn(input).shape)
-    mn = MixingNetwork(num_agents=num_agents, state_shape=state_shape)
-    agent_qs = torch.randn(1, 81)
-    state = torch.randn(1, 5, 45, 45)
-    print(mn(agent_qs, state).shape)
-    a = aqn(input ,actions, agent_ids)
+# if __name__ == "__main__":
+#     # Test QMIX
+#     num_agents = 81 
+#     state_shape = (45, 45, 5)
+#     agent_ids = [f"blue_{i}" for i in range(81)]
+#     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#     num_actions = 21
+#     qmix = QMIX(num_agents=num_agents, state_shape=state_shape, agent_ids=agent_ids, num_actions=num_actions, device=device)
+#     print(f"Total number of parameters: {qmix.num_params()})")
+#     input = torch.randn(162, 5, 13, 13)
+#     actions = torch.randint(0, 20, (162,))
+#     agent_ids = torch.tensor([i for i in range(81)])
+#     aqn = AgentQNetwork(num_actions=num_actions).to(device)
+#     # print(aqn(input).shape)
+#     mn = MixingNetwork(num_agents=num_agents, state_shape=state_shape).to(device)
+#     agent_qs = torch.randn(2, 81)
+#     state = torch.randn(2, 5, 45, 45)
+#     print(mn(agent_qs.to(device), state.to(device)).shape)
+#     a = aqn(input.to(device) ,actions.to(device), agent_ids.to(device))
