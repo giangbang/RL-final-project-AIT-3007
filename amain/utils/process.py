@@ -45,11 +45,14 @@ class Normalizer:
             pickle.dump({'mean': self.mean, 'var': self.var, 'count': self.count}, f)
 
     def load(self, filepath):
-        with open(filepath, 'rb') as f:
-            data = pickle.load(f)
-            self.mean = data['mean']
-            self.var = data['var']
-            self.count = data['count']
+        try:
+            with open(filepath, 'rb') as f:
+                data = pickle.load(f)
+                self.mean = data['mean']
+                self.var = data['var']
+                self.count = data['count']
+        except (FileNotFoundError, pickle.UnpicklingError) as e:
+            print(f"Error loading normalizer data from {filepath}: {e}")
 
 
 
