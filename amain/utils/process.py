@@ -48,6 +48,8 @@ class Normalizer:
             self.var = data['var']
             self.count = data['count']
 
+
+
 def process_batch(batchs, normalizer_obs_b: Normalizer=None, normalizer_obs_r: Normalizer=None, normalizer_state: Normalizer=None):
     # Initialize dictionaries to hold lists for each field
     batch_blue = {
@@ -57,7 +59,8 @@ def process_batch(batchs, normalizer_obs_b: Normalizer=None, normalizer_obs_r: N
         'next_obs': [],
         'state': [],
         'next_state': [],
-        'dones': []
+        'dones': [],
+        'prev_actions': []
     }
     batch_red = {
         'obs': [],
@@ -66,8 +69,12 @@ def process_batch(batchs, normalizer_obs_b: Normalizer=None, normalizer_obs_r: N
         'next_obs': [],
         'state': [],
         'next_state': [],
-        'dones': []
+        'dones': [],
+        'prev_actions': []  
     }
+
+    max_length_blue = 0
+    max_length_red = 0
 
     for episode in batchs:
         # Initialize lists to collect per-episode data
@@ -76,12 +83,14 @@ def process_batch(batchs, normalizer_obs_b: Normalizer=None, normalizer_obs_r: N
         rewards_blue_episode = []
         next_obs_blue_episode = []
         dones_blue_episode = []
+        prev_actions_blue_episode = []
 
         obs_red_episode = []
         actions_red_episode = []
         rewards_red_episode = []
         next_obs_red_episode = []
         dones_red_episode = []
+        prev_actions_red_episode = []
 
         states_episode = []
         next_states_episode = []
@@ -100,10 +109,11 @@ def process_batch(batchs, normalizer_obs_b: Normalizer=None, normalizer_obs_r: N
                 transition['obs']['blue'] = normalizer_obs_b.update_normalize(transition['obs']['blue'])
                 transition['next_obs']['blue'] = normalizer_obs_b.update_normalize(transition['next_obs']['blue'])
             obs_blue_episode.append(transition['obs']['blue'])        # Shape: (transitions, N_blue, 13, 13, 5)
-            actions_blue_episode.append(transition['actions']['blue'])   # Shape: (transitions, N_blue, )
-            rewards_blue_episode.append(transition['rewards']['blue'])   # Shape: (trainsitions, 1,)
+            actions_blue_episode.append(transition['actions']['blue'])   # Shape: (transitions, N_blue)
+            rewards_blue_episode.append(transition['rewards']['blue'])   # Shape: (transitions, 1)
             next_obs_blue_episode.append(transition['next_obs']['blue']) # Shape: (transitions, N_blue, 13, 13, 5)
-            dones_blue_episode.append(transition['dones']['blue'])      # Shape: (transitions, 1, )
+            dones_blue_episode.append(transition['dones']['blue'])      # Shape: (transitions, 1)
+            prev_actions_blue_episode.append(transition['prev_actions']['blue'])
 
             # Collect data for the red team
             if normalizer_obs_r is not None:
@@ -114,13 +124,19 @@ def process_batch(batchs, normalizer_obs_b: Normalizer=None, normalizer_obs_r: N
             rewards_red_episode.append(transition['rewards']['red'])
             next_obs_red_episode.append(transition['next_obs']['red'])
             dones_red_episode.append(transition['dones']['red'])
+            prev_actions_red_episode.append(transition['prev_actions']['red'])
+
+        # Update maximum lengths
+        max_length_blue = max(max_length_blue, len(obs_blue_episode))
+        max_length_red = max(max_length_red, len(obs_red_episode))
 
         # Convert lists to numpy arrays for the blue team
-        obs_blue_episode = np.array(obs_blue_episode)            # Shape: ( transitions, N_blue, 13, 13, 5)
-        actions_blue_episode = np.array(actions_blue_episode)    # Shape: ( transitions, N_blue)
-        rewards_blue_episode = np.array(rewards_blue_episode)    # Shape: ( transitions, 1)
-        next_obs_blue_episode = np.array(next_obs_blue_episode)  # Shape: ( transitions, N_blue, 13, 13, 5)
-        dones_blue_episode = np.array(dones_blue_episode)        # Shape: ( transitions, 1)
+        obs_blue_episode = np.array(obs_blue_episode)            # Shape: (transitions, N_blue, 13, 13, 5)
+        actions_blue_episode = np.array(actions_blue_episode)    # Shape: (transitions, N_blue)
+        rewards_blue_episode = np.array(rewards_blue_episode)    # Shape: (transitions, 1)
+        next_obs_blue_episode = np.array(next_obs_blue_episode)  # Shape: (transitions, N_blue, 13, 13, 5)
+        dones_blue_episode = np.array(dones_blue_episode)        # Shape: (transitions, 1)
+        prev_actions_blue_episode = np.array(prev_actions_blue_episode)
 
         # Append to batch_blue
         batch_blue['obs'].append(obs_blue_episode) 
@@ -128,6 +144,7 @@ def process_batch(batchs, normalizer_obs_b: Normalizer=None, normalizer_obs_r: N
         batch_blue['rewards'].append(rewards_blue_episode)
         batch_blue['next_obs'].append(next_obs_blue_episode)
         batch_blue['dones'].append(dones_blue_episode)
+        batch_blue['prev_actions'].append(prev_actions_blue_episode)
 
         # Convert lists to numpy arrays for the red team
         obs_red_episode = np.array(obs_red_episode)
@@ -135,6 +152,7 @@ def process_batch(batchs, normalizer_obs_b: Normalizer=None, normalizer_obs_r: N
         rewards_red_episode = np.array(rewards_red_episode)
         next_obs_red_episode = np.array(next_obs_red_episode)
         dones_red_episode = np.array(dones_red_episode)
+        prev_actions_red_episode = np.array(prev_actions_red_episode)
 
         # Append to batch_red
         batch_red['obs'].append(obs_red_episode)
@@ -142,7 +160,7 @@ def process_batch(batchs, normalizer_obs_b: Normalizer=None, normalizer_obs_r: N
         batch_red['rewards'].append(rewards_red_episode)
         batch_red['next_obs'].append(next_obs_red_episode)
         batch_red['dones'].append(dones_red_episode)
-
+        batch_red['prev_actions'].append(prev_actions_red_episode)
 
         # Convert states to arrays
         states_episode = np.array(states_episode)            # Shape: (episode_n, 45, 45, 5)
@@ -154,14 +172,44 @@ def process_batch(batchs, normalizer_obs_b: Normalizer=None, normalizer_obs_r: N
         batch_red['state'].append(states_episode)
         batch_red['next_state'].append(next_states_episode)
 
-    # Stack data along the batch dimension for the blue team
-    for key in batch_blue:
-        batch_blue[key] = np.stack(batch_blue[key], axis=0)
-        # Now, batch_blue[key] has shape (B, episode_n, ...)
+    # Pad sequences and create masks for the blue team
+    for key in ['obs', 'actions', 'rewards', 'next_obs', 'dones', 'state', 'next_state', 'prev_actions']:
+        max_len = max_length_blue
+        padded = []
+        masks = []
+        for seq in batch_blue[key]:
+            pad_length = max_len - len(seq)
+            if pad_length > 0:
+                padding_shape = (pad_length,) + seq.shape[1:]
+                padding = np.zeros(padding_shape, dtype=seq.dtype)
+                padded_seq = np.concatenate([seq, padding], axis=0)
+                # mask = np.concatenate([np.ones(len(seq)), np.zeros(pad_length)])
+            else:
+                padded_seq = seq
+                mask = np.ones(len(seq))
+            padded.append(padded_seq)
+            # masks.append(mask)
+        batch_blue[key] = np.stack(padded, axis=0)
+        # batch_blue[f'{key}_mask'] = np.stack(masks, axis=0)
 
-    # Stack data along the batch dimension for the red team
-    for key in batch_red:
-        batch_red[key] = np.stack(batch_red[key], axis=0)
-        # Now, batch_red[key] has shape (B, episode_n, ...)
+    # Pad sequences and create masks for the red team
+    for key in ['obs', 'actions', 'rewards', 'next_obs', 'dones', 'state', 'next_state', 'prev_actions']:
+        max_len = max_length_red
+        padded = []
+        masks = []
+        for seq in batch_red[key]:
+            pad_length = max_len - len(seq)
+            if pad_length > 0:
+                padding_shape = (pad_length,) + seq.shape[1:]
+                padding = np.zeros(padding_shape, dtype=seq.dtype)
+                padded_seq = np.concatenate([seq, padding], axis=0)
+                # mask = np.concatenate([np.ones(len(seq)), np.zeros(pad_length)])
+            else:
+                padded_seq = seq
+                # mask = np.ones(len(seq))
+            padded.append(padded_seq)
+            masks.append(mask)
+        batch_red[key] = np.stack(padded, axis=0)
+        # batch_red[f'{key}_mask'] = np.stack(masks, axis=0)
 
     return batch_blue, batch_red
