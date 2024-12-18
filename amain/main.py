@@ -21,15 +21,15 @@ def parse_args() -> argparse.Namespace:
                         help="Discount factor")
     parser.add_argument("--epsilon_start", type=float, default=1.0,
                         help="Starting value of epsilon for epsilon-greedy exploration")
-    parser.add_argument("--epsilon_decay", type=float, default=0.999,
+    parser.add_argument("--epsilon_decay", type=float, default=0.996,
                         help="Decay rate of epsilon")
-    parser.add_argument("--epsilon_min", type=float, default=0.06,
+    parser.add_argument("--epsilon_min", type=float, default=0.05,
                         help="Minimum value of epsilon")
-    parser.add_argument("--num_episodes", type=int, default=5000,
+    parser.add_argument("--num_episodes", type=int, default=1000,
                         help="Number of episodes to train")
-    parser.add_argument("--update_step", type=int, default=50,
+    parser.add_argument("--update_step", type=int, default=100,
                         help="Number of steps between target network updates")
-    parser.add_argument("--tau", type=float, default=0.8,
+    parser.add_argument("--tau", type=float, default=0.005,
                         help="Soft update coefficient for target networks")
     parser.add_argument("--sub_bs", type=int, default=1,
                         help="Sub batch size for training (in each episode)")
@@ -44,7 +44,8 @@ if __name__ == "__main__":
     # Initialize wandb
     wandb.login(key="37d305fc5fac9b15b88ec48208250be56185986e")  # Replace with your actual API key or handle securely
     wandb.init(
-        project="QMIX_Project_1",
+        project="QMIX_Project_RL_final",
+        # entity="GRU",
         config={
             "seed": args.seed,
             "learning_rate": args.learning_rate,
