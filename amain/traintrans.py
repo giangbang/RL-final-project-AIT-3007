@@ -252,6 +252,9 @@ def train(config):
                 torch.save(qmix_red.agent_q_network.state_dict(), save_path_red)
                 torch.save(qmix_blue.mixing_network.state_dict(), "mixing_network_blue_ep{}.pth".format(ep))
                 torch.save(qmix_red.mixing_network.state_dict(), "mixing_network_red_ep{}.pth".format(ep))
+                normalizer_obs_b.save("normalizer_obs_b_ep{}.pkl".format(ep))
+                normalizer_obs_r.save("normalizer_obs_r_ep{}.pkl".format(ep))
+                normalizer_state.save("normalizer_state_ep{}.pkl".format(ep))
             # Check if the save time has passed
         elapsed_time = time.time() - start_time
         if (save_time_seconds - elapsed_time) <= 100:
