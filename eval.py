@@ -3,14 +3,16 @@ from torch_model import QNetwork
 from final_torch_model import QNetwork as FinalQNetwork
 import torch
 import numpy as np
+import argparse
 
 try:
     from tqdm import tqdm
 except ImportError:
     tqdm = lambda x, *args, **kwargs: x  # Fallback: tqdm becomes a no-op
 
+from evaluate.blue_policy import get_blue_policy
 
-def eval():
+def eval(args):
     max_cycles = 300
     env = battle_v4.env(map_size=45, max_cycles=max_cycles)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -33,6 +35,9 @@ def eval():
         torch.load("red_final.pt", weights_only=True, map_location="cpu")
     )
     final_q_network.to(device)
+    
+    # Load blue agent
+    blue_policy = get_blue_policy(args.model_path)
 
     def pretrain_policy(env, agent, obs):
         observation = (
@@ -101,7 +106,7 @@ def eval():
     print("Eval with random policy")
     print(
         run_eval(
-            env=env, red_policy=random_policy, blue_policy=random_policy, n_episode=30
+            env=env, red_policy=random_policy, blue_policy=blue_policy, n_episode=1
         )
     )
     print("=" * 20)
@@ -109,7 +114,7 @@ def eval():
     print("Eval with trained policy")
     print(
         run_eval(
-            env=env, red_policy=pretrain_policy, blue_policy=random_policy, n_episode=30
+            env=env, red_policy=pretrain_policy, blue_policy=blue_policy, n_episode=1
         )
     )
     print("=" * 20)
@@ -119,12 +124,16 @@ def eval():
         run_eval(
             env=env,
             red_policy=final_pretrain_policy,
-            blue_policy=random_policy,
-            n_episode=30,
+            blue_policy=blue_policy,
+            n_episode=1,
         )
     )
     print("=" * 20)
 
 
 if __name__ == "__main__":
-    eval()
+    parser = argparse.ArgumentParser(description='Evaluate QMIX agents')
+    parser.add_argument('--model_path', type=str, default='model/qmix', help='path to model')
+    
+    args = parser.parse_args()
+    eval(args)
