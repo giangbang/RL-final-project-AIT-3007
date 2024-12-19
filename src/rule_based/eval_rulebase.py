@@ -84,11 +84,9 @@ def evaluate(env, blue_policy, red_policy, n_episodes=100, max_cycles=1000, save
                     who_loses = agent_team
             else:
                 if agent_team == "red":
-                    # action = red_policy(env, agent, observation)
-                    action = blue_policy.get_action(torch.from_numpy(observation).permute(2, 0, 1).unsqueeze(0))[0].item()
-                else:
                     action = red_policy(env, agent, observation)
-                    # action = blue_policy.get_action(torch.from_numpy(observation).permute(2, 0, 1).unsqueeze(0))[0].item()
+                else:
+                    action = blue_policy.get_action(torch.from_numpy(observation).permute(2, 0, 1).unsqueeze(0))[0].item()
 
             env.step(action)
             
@@ -150,7 +148,7 @@ if __name__ == "__main__":
     env = battle_v4.env(map_size=45, max_cycles=300, minimap_mode=False, extra_features=False, render_mode=render_mode)
     
     # Blue agent
-    blue_policy = RuleBasedAgent(my_team='red')
+    blue_policy = RuleBasedAgent(my_team='blue')
    
     # Khởi tạo policies
     red_policy = get_random_policy()
