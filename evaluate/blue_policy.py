@@ -1,8 +1,8 @@
 import torch
 
 from magent2.environments import battle_v4
-from qmix import CNNFeatureExtractor
-from rnn_agent import RNN_Trainer
+from src.qmix.qmix import CNNFeatureExtractor
+from src.rnn_agent.rnn_agent import RNN_Trainer
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

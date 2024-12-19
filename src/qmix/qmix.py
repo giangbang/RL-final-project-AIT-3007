@@ -11,9 +11,9 @@ import pickle
 import argparse
 import os
 
-from rewards import _calc_reward
-from rnn_agent import RNNAgent, ReplayBufferGRU
-from cnn import CNNFeatureExtractor
+from src.qmix.rewards import _calc_reward
+from src.rnn_agent.rnn_agent import RNNAgent, ReplayBufferGRU
+from src.cnn import CNNFeatureExtractor
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)

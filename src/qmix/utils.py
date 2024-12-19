@@ -1,5 +1,5 @@
 import numpy as np
-from eval_qmix import get_pretrain_red_policy
+from src.qmix.eval_qmix import get_pretrain_red_policy
 
 blue_agents = ['blue_0', 'blue_1', 'blue_2', 'blue_3', 'blue_4', 'blue_5', 'blue_6', 'blue_7', 'blue_8', 'blue_9', 'blue_10', 'blue_11', 'blue_12', 'blue_13', 'blue_14', 'blue_15', 'blue_16', 'blue_17', 'blue_18', 'blue_19', 'blue_20', 'blue_21', 'blue_22', 'blue_23', 'blue_24', 'blue_25', 'blue_26', 'blue_27', 'blue_28', 'blue_29', 'blue_30', 'blue_31', 'blue_32', 'blue_33', 'blue_34', 'blue_35', 'blue_36', 'blue_37', 'blue_38', 'blue_39', 'blue_40', 'blue_41', 'blue_42', 'blue_43', 'blue_44', 'blue_45', 'blue_46', 'blue_47', 'blue_48', 'blue_49', 'blue_50', 'blue_51', 'blue_52', 'blue_53', 'blue_54', 'blue_55', 'blue_56', 'blue_57', 'blue_58', 'blue_59', 'blue_60', 'blue_61', 'blue_62', 'blue_63', 'blue_64', 'blue_65', 'blue_66', 'blue_67', 'blue_68', 'blue_69', 'blue_70', 'blue_71', 'blue_72', 'blue_73', 'blue_74', 'blue_75', 'blue_76', 'blue_77', 'blue_78', 'blue_79', 'blue_80']
 
