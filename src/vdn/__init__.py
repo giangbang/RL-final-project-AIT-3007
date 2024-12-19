@@ -1,1 +1,0 @@
-from rule_based.model import RuleBasedAgent

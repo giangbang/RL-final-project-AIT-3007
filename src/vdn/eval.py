@@ -9,6 +9,6 @@ def evaluate_model(env, num_episodes, model, run_episode_fn):
     """
     model.eval()
     score = 0
-    for episode_i in range(num_episodes):
+    for _ in range(num_episodes):
         score += run_episode_fn(env, model, epsilon=0)
     return score / num_episodes
