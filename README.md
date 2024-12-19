@@ -11,19 +11,15 @@ Your agent's performance should be evaluated based on reward and win rate agains
 
 <p align="center">
   <img src="assets/random.gif" width="300" alt="random agent" />
-  <img src="assets/pretrained.gif" width="300" alt="pretrained agent" />
+  <img src="assets/pretrained.gif" width="300" alt="My agent vs random agent" />
 </p>
-
-See `video` folder for a demo of how each type of opponent behaves.
-Checkout a [Colab notebook](https://colab.research.google.com/drive/1qmx_NCmzPlc-atWqexn2WueqMKB_ZTxc?usp=sharing) for running this demo.
-
-Update: The final ~~stronger~~ agent is released, this agent is trained on selfplay in about 15 minutes using DQN. See the below video
 
 <p align="center">
-<img src="assets/blueselfplay.gif" width="300" alt="selfplay blue vs random" />
-  <img src="assets/redselfplay.gif" width="300" alt="selfplay combat" />
+<img src="assets/blueselfplay.gif" width="300" alt="My agent vs red.pt agent" />
+  <img src="assets/redselfplay.gif" width="300" alt="My agent vs final red agent" />
 </p>
-In the above demo, the left side shows the blue agent competing against random red agents, while the right side displays a battle between two self-play agents. Blue agents can comfortably defeat random agents, showing their cabability toward untrained agents, but they struggle with the red ones, which are intentionally trained more, so that they can dominate blue ones. As before, you should evaluate your agents against the red agents.
+
+Checkout a [Colab notebook](https://colab.research.google.com/drive/1qmx_NCmzPlc-atWqexn2WueqMKB_ZTxc?usp=sharing) for running this demo.
 
 ## Installation
 clone this repo and install with
