@@ -2,7 +2,7 @@ import numpy as np
 import collections
 import torch
 import torch.nn as nn
-from utils import compute_output_dim
+from src.qmix.utils import compute_output_dim
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

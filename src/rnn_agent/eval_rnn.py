@@ -5,7 +5,8 @@ import torch
 import cv2
 import argparse
 from magent2.environments import battle_v4
-from qmix import QMix_Trainer, ReplayBuffer, CNNFeatureExtractor
+from src.qmix.qmix import QMix_Trainer, ReplayBuffer, CNNFeatureExtractor
+from src.rnn_agent.rnn_agent import RNN_Trainer
 from torch_model import QNetwork
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -28,17 +29,15 @@ def get_blue_policy(model_path, hidden_dim=64, hypernet_dim=128):
     
     # Khởi tạo replay buffer và QMIX trainer
     replay_buffer = ReplayBuffer(2)  # Chỉ cần buffer size nhỏ vì không train
-    learner = QMix_Trainer(
-        replay_buffer=replay_buffer,
+
+    learner = RNN_Trainer(
         n_agents=n_agents,
         obs_dim=obs_dim,
-        state_dim=state_dim,
         action_shape=action_shape,
         action_dim=action_dim,
         hidden_dim=hidden_dim,
-        hypernet_dim=hypernet_dim,
         target_update_interval=10,
-        epsilon_start=0.0,  # Không cần epsilon vì đang evaluate
+        epsilon_start=0.0,
         epsilon_end=0.0,
         epsilon_decay=1.0
     )
@@ -196,7 +195,7 @@ if __name__ == "__main__":
     if args.render:
         render_mode = "human"
     # Khởi tạo environment
-    env = battle_v4.env(map_size=45, minimap_mode=False, extra_features=False, render_mode=render_mode)
+    env = battle_v4.env(map_size=45, max_cycles=300, minimap_mode=False, extra_features=False, render_mode=render_mode)
     
     q_network = QNetwork(
         env.observation_space("red_0").shape, env.action_space("red_0").n

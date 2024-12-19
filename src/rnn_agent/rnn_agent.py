@@ -7,7 +7,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 
 from torch.distributions import Categorical
-from cnn import CNNFeatureExtractor
+from src.cnn import CNNFeatureExtractor
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
