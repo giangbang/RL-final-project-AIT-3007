@@ -56,7 +56,7 @@ def train(config):
     # env = battle_v4.parallel_env(map_size=30, minimap_mode=False, max_cycles=300, seed=10)
     env = battle_v4.parallel_env(map_size=45, minimap_mode=False, step_reward=-0.08,
             dead_penalty=-0.2, attack_penalty=-0.1, attack_opponent_reward=1.6, max_cycles=300, 
-            extra_features=False, seed=config.seed)
+            extra_features=False,render_mode="human", seed=config.seed)
     env = ss.black_death_v3(env)
     max_cycles = 300
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -72,8 +72,8 @@ def train(config):
 
     qmix_blue = QMIX(num_agents=81, agent_ids=blue_agents, agent_ids1=red_agents, state_shape=(5, 45, 45), device=device, lr=learning_rate, gamma=gamma)
     # qmix_red = QMIX(num_agents=81, agent_ids=red_agents, state_shape=(5, 45, 45), device=device, lr=learning_rate, gamma=gamma)
-    qmix_blue.agent_q_network.load_state_dict(torch.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/qmix_blue_ep199.pth"))
-    qmix_blue.mixing_network.load_state_dict(torch.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/mn_blue_ep199.pth"))
+    qmix_blue.agent_q_network.load_state_dict(torch.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/qmix_blue_ep549.pth"))
+    qmix_blue.mixing_network.load_state_dict(torch.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/mn_blue_ep549.pth"))
 
     buffer_size = 120
     tempdir = tempfile.TemporaryDirectory(dir="/home/trnmah/284-home/tmp")

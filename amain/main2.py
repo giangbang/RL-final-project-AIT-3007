@@ -19,9 +19,9 @@ def parse_args() -> argparse.Namespace:
                         help="Batch size for training")
     parser.add_argument("--gamma", type=float, default=0.99,
                         help="Discount factor")
-    parser.add_argument("--epsilon_start", type=float, default=1.0,
+    parser.add_argument("--epsilon_start", type=float, default=0.5,
                         help="Starting value of epsilon for epsilon-greedy exploration")
-    parser.add_argument("--epsilon_decay", type=float, default=0.389,
+    parser.add_argument("--epsilon_decay", type=float, default=0.99,
                         help="Decay rate of epsilon")
     parser.add_argument("--epsilon_min", type=float, default=0.05,
                         help="Minimum value of epsilon")

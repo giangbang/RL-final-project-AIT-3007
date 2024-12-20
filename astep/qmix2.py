@@ -1,4 +1,5 @@
 import gc
+import time
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -144,23 +145,25 @@ class QNetwork(nn.Module):
     def __init__(self, observation_shape, action_shape=21):
         super(QNetwork, self).__init__()
         self.cnn = nn.Sequential(
-            DepthwiseSeparableConv(5, 8, stride=2),
-            DepthwiseSeparableConv(8, 16, stride=2),
-            # ResidualBlock(16, 16),
+            DepthwiseSeparableConv(5, 32, stride=2),
+            # nn.BatchNorm2d(32),
+            # nn.ReLU(inplace=True),
             nn.MaxPool2d(2),
-            DepthwiseSeparableConv(16, 32, stride=2),
+            DepthwiseSeparableConv(32, 32, stride=2),
+            nn.ReLU(inplace=True),
+            # nn.BatchNorm2d(32),
+            nn.MaxPool2d(2),
             # DepthwiseSeparableConv(32, 32, stride=2),
             # DepthwiseSeparableConv(32, 64, stride=2),
             nn.Flatten(),
         )
         # Calculate the size after CNN layers
         self._create_fc(observation_shape)
-        self.fc1 = nn.Linear(32+4, 32)
+        self.fc1 = nn.Linear(32+4, 64)
         self.fc2 = nn.Sequential(
-            nn.Linear(64, 32),
-            nn.Linear(32, action_shape),
+            nn.Linear(64, action_shape),
         )
-        self.gru = nn.GRUCell(32, 64)
+        self.gru = nn.GRUCell(64, 64)
 
         self.embed = nn.Embedding(action_shape, 4)
     
@@ -212,27 +215,31 @@ class MixingNetwork(nn.Module):
 
         self.state_encoder = nn.Sequential(
             # Initial feature extraction
-            DepthwiseSeparableConv(state_shape[2], 4),
-            nn.ReLU(inplace=True),
-            ResidualBlock(4, 4),
-            # Downsample 45->23
-            DepthwiseSeparableConv(4, 8, stride=2),
-            nn.BatchNorm2d(8),
-            nn.ReLU(inplace=True),
-            ResidualBlock(8, 8),
-            # Downsample 23->12
-            DepthwiseSeparableConv(8, 16, stride=2),
-            nn.BatchNorm2d(16),
-            nn.ReLU(inplace=True),
-            ResidualBlock(16, 16),           
-
-            # Downsample 12->6
-            DepthwiseSeparableConv(16, 32, stride=2),
+            DepthwiseSeparableConv(state_shape[2], 32, stride=2),
             nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
+            DepthwiseSeparableConv(32, 64, stride=2),
+            # nn.BatchNorm2d(64),
+            DepthwiseSeparableConv(64, 64, stride=2),
+            # nn.ReLU(inplace=True),
+            # ResidualBlock(4, 4),
+            # # Downsample 45->23
+            # DepthwiseSeparableConv(4, 8, stride=2),
+            # nn.BatchNorm2d(8),
+            # nn.ReLU(inplace=True),
+            # ResidualBlock(8, 8),
+            # # Downsample 23->12
+            # DepthwiseSeparableConv(8, 16, stride=2),
+            # nn.BatchNorm2d(16),
+            # nn.ReLU(inplace=True),
+            # ResidualBlock(16, 16),           
+
+            # # Downsample 12->6
+            # DepthwiseSeparableConv(16, 32, stride=2),
+            # nn.BatchNorm2d(32),
+            # nn.ReLU(inplace=True),
             # Final reduction 6->1
-            nn.Conv2d(32, 64, kernel_size=6),
-            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 64, kernel_size=6),
+            nn.BatchNorm2d(64),
             nn.Flatten(),
             # ResidualBlock(64, 64),
             # nn.ReLU(inplace=True)
@@ -327,6 +334,8 @@ class QMIX:
 
         # Initialize networks
         self.agent_q_network = QNetwork(observation_shape=(5,13,13), action_shape=21).to(device)
+        # self.agent_q_network1 = QNetwork(observation_shape=(5,13,13), action_shape=21).to(device)
+        # self.agent_q_network2 = QNetwork(observation_shape=(5,13,13), action_shape=21).to(device)
         self.mixing_network = MixingNetwork(num_agents, state_shape=state_shape).to(device)
 
         self.target_agent_q_network = QNetwork(observation_shape=(5,13,13), action_shape=21).to(device)
@@ -576,6 +585,9 @@ if __name__ == "__main__":
     share = QNetwork((5, 13, 13), 5)
     mixing = MixingNetwork(81)
     a = QMIX(5, (45, 45, 5), device)
-    # print(np.random( 13, 13, 5).shape)
-    # a.select_actions(np.random.rand( 13, 13, 5), None)
-    print(a.num_params(), mixing.num_params())
+    # a = mixing()
+    # print(np.random( 13, 13, 5).shape)32
+    start= time.time()
+    a.select_actions(np.random.rand( 13, 13, 5), None)
+    # print(a.num_params(), mixing.num_params())
+    print(time.time()-start)
