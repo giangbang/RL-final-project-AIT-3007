@@ -21,15 +21,15 @@ def parse_args() -> argparse.Namespace:
                         help="Discount factor")
     parser.add_argument("--epsilon_start", type=float, default=1.0,
                         help="Starting value of epsilon for epsilon-greedy exploration")
-    parser.add_argument("--epsilon_decay", type=float, default=0.996,
+    parser.add_argument("--epsilon_decay", type=float, default=0.994,
                         help="Decay rate of epsilon")
     parser.add_argument("--epsilon_min", type=float, default=0.05,
                         help="Minimum value of epsilon")
     parser.add_argument("--num_episodes", type=int, default=1000,
                         help="Number of episodes to train")
-    parser.add_argument("--update_step", type=int, default=100,
+    parser.add_argument("--update_step", type=int, default=50,
                         help="Number of steps between target network updates")
-    parser.add_argument("--tau", type=float, default=0.005,
+    parser.add_argument("--tau", type=float, default=0.01,
                         help="Soft update coefficient for target networks")
     parser.add_argument("--sub_bs", type=int, default=1,
                         help="Sub batch size for training (in each episode)")
