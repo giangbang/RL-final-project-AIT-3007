@@ -127,7 +127,7 @@ class AgentQNetwork(nn.Module):
         # Assuming input image size is (C, H, W) = (5, 45, 45)
         # After two downsampling layers with stride=2: H and W become 11 (45/2 -> 22, then 11)
 
-        a_embed, id_embed = 32, 32 
+        a_embed, id_embed = 4, 4 
         self.action_embed = nn.Embedding(21, a_embed) 
         self.agent_id_embed = nn.Embedding(81, id_embed)
 
@@ -140,9 +140,9 @@ class AgentQNetwork(nn.Module):
         self.fc = nn.Sequential(
             ResidualFCBlock(self.hidden_dim, 64),
             nn.Dropout(0.1),
-            ResidualFCBlock(64, 32),
+            ResidualFCBlock(64, 64),
             nn.Dropout(0.1),
-            nn.Linear(32, num_actions)
+            nn.Linear(64, num_actions)
         )
         
         # Initialization for the final layer
@@ -173,6 +173,8 @@ class AgentQNetwork(nn.Module):
         # make hidden states on same device as model
         return torch.zeros(1, self.hidden_dim).to(device) # self.fc1.weight is used as a reference to the device
 
+    def num_params(self):
+        return sum(p.numel() for p in self.parameters())
 
 
     def forward(self, x, a=None, id=None, hidden=None):
@@ -288,18 +290,12 @@ class MixingNetwork(nn.Module):
         )
         self.hyper_w_final = nn.Sequential(
             ResidualFCBlock(self.state_dim, embed_dim, negative_slope=0),
-            # nn.ReLU(inplace=    True),
-            nn.Linear(embed_dim, embed_dim),
-            nn.ReLU(inplace=True)
         )
 
         # Hypernetworks for biases
         self.hyper_b_1 = ResidualFCBlock(self.state_dim, embed_dim, negative_slope=0)
         self.hyper_b_final = nn.Sequential(
-            ResidualFCBlock(self.state_dim, embed_dim,negative_slope=0),
-            # nn.ReLU(inplace=True),  
-            nn.Linear(embed_dim, 1),
-            nn.ReLU(inplace=True)
+            ResidualFCBlock(self.state_dim, 1,negative_slope=0),
         )
         
         # Optional attention mechanism
@@ -356,12 +352,6 @@ class MixingNetwork(nn.Module):
         
 from typing import Dict, Tuple
 
-import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import wandb
-from magent2.environments import battle_v4
 
 class QMIX:
     """
@@ -401,17 +391,13 @@ class QMIX:
         # # If torch.compile fails (e.g., not using PyTorch 2.0), proceed without compiling
   
         self.update_target_hard()
-        
         # Optimizer and scheduler
         self.optimizer = optim.Adam(
             params=list(self.agent_q_network.parameters()) + list(self.mixing_network.parameters()),
-            lr=1e-3,
-        )
-        self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
-            self.optimizer, T_0=100, T_mult=2, eta_min=1e-6,
+            lr=8e-5,
         )
         self.scheduler1 = optim.lr_scheduler.StepLR(
-            self.optimizer, step_size=100, gamma=0.9
+            self.optimizer, step_size=300, gamma=0.9
         )
 
         self.loss_fn = nn.MSELoss().to(device)
@@ -505,7 +491,6 @@ class QMIX:
         hidden_target = None
         q_evals = []
         q_targets = []
-        entropy = 0
         for i in range(T):
             # Process each episode individually
             loss_prio = 0
@@ -595,7 +580,7 @@ class QMIX:
         nn.utils.clip_grad_norm_(self.mixing_network.parameters(), max_norm=1.0)
 
         self.optimizer.step()
-        self.scheduler.step()
+        self.scheduler1.step()
         self.optimizer.zero_grad()
 
         total_loss += loss.item()
@@ -606,7 +591,7 @@ class QMIX:
         # torch.cuda.empty_cache()
         priorities.append(loss_prio)
 
-        self.scheduler1.step()
+        # self.scheduler1.step()
     # Return the average loss over all sub-batches
         return total_loss, priorities
 
@@ -634,7 +619,9 @@ class QMIX:
         # calculate total paramater of AgentQNetwork and MixingNetwork
         return sum(p.numel() for p in self.agent_q_network.parameters()) + sum(p.numel() for p in self.mixing_network.parameters())
 
-# if __name__ == "__main__":
+if __name__ == "__main__":
+    aqn = AgentQNetwork()
+    print(aqn.num_params())
 #     # Test QMIX
 #     num_agents = 81 
 #     state_shape = (45, 45, 5)
