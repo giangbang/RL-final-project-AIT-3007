@@ -220,7 +220,7 @@ def process_batch(batchs, normalizer_obs_b: Normalizer=None, normalizer_obs_r: N
 
     return batch_blue, batch_red
 
-def collate_episodes(episodes: List[TensorDict], device: torch.device):
+def collate_episodes(episodes: List[TensorDict], max_length:int):
     """
     Collate a list of episodes into batched TensorDict with padding.
 
@@ -232,7 +232,7 @@ def collate_episodes(episodes: List[TensorDict], device: torch.device):
         TensorDict: Batched episodes with padding and masks.
     """
     # Determine the maximum episode length in the batch
-    max_length = max(episode["o_b"].shape[0] for episode in episodes)
+    max_length = max_length
 
     batched = {}
     masks = torch.zeros(len(episodes), max_length, dtype=torch.bool)
