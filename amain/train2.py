@@ -72,8 +72,8 @@ def train(config):
 
     qmix_blue = QMIX(num_agents=81, agent_ids=blue_agents, agent_ids1=red_agents, state_shape=(5, 45, 45), device=device, lr=learning_rate, gamma=gamma)
     # qmix_red = QMIX(num_agents=81, agent_ids=red_agents, state_shape=(5, 45, 45), device=device, lr=learning_rate, gamma=gamma)
-    qmix_blue.agent_q_network.load_state_dict(torch.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/qmix_blue_ep549.pth"))
-    qmix_blue.mixing_network.load_state_dict(torch.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/mn_blue_ep549.pth"))
+    qmix_blue.agent_q_network.load_state_dict(torch.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/model1/LSTMsecond/qmix_blue_ep399.pth"))
+    qmix_blue.mixing_network.load_state_dict(torch.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/model1/LSTMsecond/mn_blue_ep399.pth"))
 
     buffer_size = 120
     tempdir = tempfile.TemporaryDirectory(dir="/home/trnmah/284-home/tmp")
