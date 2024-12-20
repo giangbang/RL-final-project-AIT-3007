@@ -1,4 +1,4 @@
-from utils.qmix2 import QMIX
+from amain.utils.qmix_sl import QMIX
 from tensordict.tensordict import TensorDict
 import tempfile
 # from utils.rb import ReplayBuffer, PrioritizedReplayBuffer
@@ -72,10 +72,11 @@ def train(config):
 
     qmix_blue = QMIX(num_agents=81, agent_ids=blue_agents, agent_ids1=red_agents, state_shape=(5, 45, 45), device=device, lr=learning_rate, gamma=gamma)
     # qmix_red = QMIX(num_agents=81, agent_ids=red_agents, state_shape=(5, 45, 45), device=device, lr=learning_rate, gamma=gamma)
-    qmix_blue.agent_q_network.load_state_dict(torch.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/model1/LSTMsecond/qmix_blue_ep399.pth"))
-    qmix_blue.mixing_network.load_state_dict(torch.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/model1/LSTMsecond/mn_blue_ep399.pth"))
+    # qmix_blue.agent_q_network.load_state_dict(torch.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/model1/lstmfirst/mn_blue_ep399.pth"))
+    # qmix_blue.mixing_network.load_state_dict(torch.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/model1/lstmfirst/qmix_blue_ep399.pth"))
+    # qmix_blue.update_target_hard()
 
-    buffer_size = 120
+    buffer_size = 100
     tempdir = tempfile.TemporaryDirectory(dir="/home/trnmah/284-home/tmp")
     replay_buffer = TensorDictReplayBuffer(
         storage=LazyMemmapStorage(buffer_size, scratch_dir=tempdir.name),

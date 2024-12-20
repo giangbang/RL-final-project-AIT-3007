@@ -1,4 +1,4 @@
-from train2 import train
+from amain.train_sl import train
 import wandb
 import argparse
 def parse_args() -> argparse.Namespace:
@@ -19,13 +19,13 @@ def parse_args() -> argparse.Namespace:
                         help="Batch size for training")
     parser.add_argument("--gamma", type=float, default=0.99,
                         help="Discount factor")
-    parser.add_argument("--epsilon_start", type=float, default=0.5,
+    parser.add_argument("--epsilon_start", type=float, default=0.6,
                         help="Starting value of epsilon for epsilon-greedy exploration")
-    parser.add_argument("--epsilon_decay", type=float, default=0.99,
+    parser.add_argument("--epsilon_decay", type=float, default=0.995,
                         help="Decay rate of epsilon")
     parser.add_argument("--epsilon_min", type=float, default=0.05,
                         help="Minimum value of epsilon")
-    parser.add_argument("--num_episodes", type=int, default=40000,
+    parser.add_argument("--num_episodes", type=int, default=400,
                         help="Number of episodes to train")
     parser.add_argument("--update_step", type=int, default=200,
                         help="Number of steps between target network updates")
