@@ -17,6 +17,7 @@ import numpy as np
 import torch
 import time
 
+
 def set_seed(seed: int):
     """Set seed for reproducibility."""
     random.seed(seed)
@@ -52,9 +53,9 @@ def train(config):
     sub_bs = config.sub_bs
     num_envs = 2 
     # env = battle_v4.parallel_env(map_size=30, minimap_mode=False, max_cycles=300, seed=10)
-    env = battle_v4.parallel_env(map_size=45, minimap_mode=False, step_reward=-0.01,
-            dead_penalty=-0.2, attack_penalty=-0.1, attack_opponent_reward=1, max_cycles=310, 
-            extra_features=False)
+    env = battle_v4.parallel_env(map_size=45, minimap_mode=False, step_reward=-0.02,
+            dead_penalty=-0.2, attack_penalty=-0.1, attack_opponent_reward=1.6, max_cycles=310, 
+            extra_features=False, seed=config.seed)
     env = ss.black_death_v3(env)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     env.reset()
@@ -78,6 +79,10 @@ def train(config):
         gamma=gamma,
         sub_batch_size=sub_bs
     )
+    # qmix_blue.agent_q_network.load_state_dict(torch.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/model1/LSTMreal1bs774ep/aqn_model_bafter_2_hours.pth"))
+    # qmix_blue.mixing_network.load_state_dict(torch.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/model1/LSTMreal1bs774ep/mn_model_btarget_after_2_hours.pth"))
+    # qmix_blue.update_target_hard()
+    # doi QMIX cua minh
     qmix_red = QMIX(
         num_agents=num_red_agents,
         state_shape=(45, 45, 5),
@@ -88,11 +93,14 @@ def train(config):
         gamma=gamma,
         sub_batch_size=sub_bs
     )
+    # qmix_red.agent_q_network.load_state_dict(torch.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/model1/LSTMreal1bs774ep/aqn_model_rafter_2_hours.pth"))
+    # qmix_red.mixing_network.load_state_dict(torch.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/model1/LSTMreal1bs774ep/mn_model_rtarget_after_2_hours.pth"))
+    # qmix_red.update_target_hard()
 
     # Initialize replay buffer
     # field_names = ["obs", "actions", "rewards", "next_obs", "dones", "state", "next_state", "prev_actions"]
 
-    buffer_size = 120
+    buffer_size = 150
     tempdir = tempfile.TemporaryDirectory(dir="/home/trnmah/284-home/tmp")
     replay_buffer = TensorDictReplayBuffer(
         storage=LazyMemmapStorage(buffer_size, scratch_dir=tempdir.name),
@@ -106,29 +114,26 @@ def train(config):
     obs_shape = (13,13,5)
     state_shape = (45,45,5)
     count = 0
-    normalizer_obs_b = Normalizer(shape=obs_shape)
-    normalizer_obs_b.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/amain/norm/normalizer_obs_b299.pkl")
-    normalizer_obs_r = Normalizer(shape=obs_shape)
-    normalizer_obs_r.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/amain/norm/normalizer_obs_r299.pkl")
-    normalizer_state = Normalizer(shape=state_shape)
-    normalizer_state.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/amain/norm/normalizer_state299.pkl")
+    # normalizer_obs_b = Normalizer(shape=obs_shape)
+    # normalizer_obs_r = Normalizer(shape=obs_shape)
+    # normalizer_state = Normalizer(shape=state_shape)
 
     # a_ids = torch.tensor([i for i in range(num_blue_agents)], dtype=torch.long).to(device)
 
     for ep in range(num_episodes):
-        prev_actions = {"b": np.zeros((81,)), "r": np.zeros((81,))}
+        # prev_actions = {"b": np.zeros((81,)), "r": np.zeros((81,))}
 
         obs, _ = env.reset()
         # We will collect transitions after all blue agents have acted once (a "joint step")
         # the purpose of joint step is to collect joint transitions for QMIX training
         global_state = env.state().astype(np.float32) # global state for mixing
-        global_state = normalizer_state.update_normalize(global_state)
+        # global_state = normalizer_state.update_normalize(global_state)
 
         obs_array_blue = np.stack([obs[a] for a in blue_agents], axis=0, dtype=np.float32)
-        obs_array_blue = normalizer_obs_b.update_normalize(obs_array_blue)
+        # obs_array_blue = normalizer_obs_b.update_normalize(obs_array_blue)
 
         obs_array_red = np.stack([obs[a] for a in red_agents], axis=0, dtype=np.float32)
-        obs_array_red = normalizer_obs_r.update_normalize(obs_array_red)
+        # obs_array_red = normalizer_obs_r.update_normalize(obs_array_red)
 
         episode_reward_blue = 0
         episode_reward_red = 0
@@ -138,8 +143,8 @@ def train(config):
         count += 1
         h_r = None
         h_b = None
-        prev_actions_r = np.zeros((81,), dtype=np.int64)
-        prev_actions_b = np.zeros((81,), dtype=np.int64)
+        prev_actions_r = np.zeros((81,), dtype=np.uint8)
+        prev_actions_b = np.zeros((81,), dtype=np.uint8)
         # if ep > 100 and ep < 250:
         #     add_parameter_noise(qmix_blue.agent_q_network)
         #     add_parameter_noise(qmix_red.agent_q_network)
@@ -167,8 +172,8 @@ def train(config):
                 dones[agent] = terminations[agent] or truncations[agent]
 
             next_global_state = env.state().astype(np.float32)
-            next_global_state = normalizer_state.update_normalize(next_global_state)
-
+            # next_global_state = normalizer_state.update_normalize(next_global_state)
+            
             done_all = np.all(list(dones.values()))
 
             reward_blue = sum([rewards[a] for a in blue_agents])
@@ -181,10 +186,10 @@ def train(config):
             a_red = np.array([actions_red[a] for a in red_agents])
 
             next_obs_array_blue = np.stack([next_obs[a] for a in blue_agents], axis=0, dtype=np.float32)
-            next_obs_array_blue = normalizer_obs_b.update_normalize(next_obs_array_blue)
+            # next_obs_array_blue = normalizer_obs_b.update_normalize(next_obs_array_blue)
 
             next_obs_array_red = np.stack([next_obs[a] for a in red_agents], axis=0, dtype=np.float32)
-            next_obs_array_red = normalizer_obs_r.update_normalize(next_obs_array_red)
+            # next_obs_array_red = normalizer_obs_r.update_normalize(next_obs_array_red)
 
             # obs_save = {"blue": obs_array_blue, "red": obs_array_red} # obs_array_blue: (81, 13, 13, 5)
             # reward_save = {"blue": reward_blue, "red": reward_red} # reward_blue: (1,)
@@ -248,7 +253,7 @@ def train(config):
 
         # Create a TensorDict with a batch size of 1 (single trajectory)
         episode_tensordict = TensorDict(episode_tensordict, batch_size=[1])
-        episode_tensordict = collate_episodes(episode_tensordict, device)
+        episode_tensordict = collate_episodes(episode_tensordict, max_length=310)
         # Increment episode_id_counter for the next episode
         # episode_id_counter += 1
 
@@ -256,10 +261,9 @@ def train(config):
         replay_buffer.extend(episode_tensordict)
 
         del episode_transitions
-        gc.collect()
 
         # Train QMIX
-        if len(replay_buffer) >= batch_size and ep >= 4:
+        if len(replay_buffer) >= batch_size and ep >= 20:
                 # batch, ids = rb.sample(batch_size)
                 batch = replay_buffer.sample(batch_size)
                 batch = batch.to(device)
@@ -272,14 +276,18 @@ def train(config):
                 # batch['next_state']: (B, transitions, 45, 45, 5)
                 # batch['dones']: (B, transitions, )
                 # batch_blue, batch_red = process_batch(batch, normalizer_obs_b=normalizer_obs_b, normalizer_obs_r=normalizer_obs_r, normalizer_state=normalizer_state)
-                loss_blue, priorities_b = qmix_blue.update(batch_blue, ep)
-                loss_red, priorities_r = qmix_red.update(batch_red,ep)
+                loss_blue1, priorities_b = qmix_blue.update(batch_blue, ep)
+                loss_red1, priorities_r = qmix_red.update(batch_red,ep)
 
+                batch = replay_buffer.sample(batch_size)
+                batch = batch.to(device)
+                batch_blue, batch_red = process_episodes(batch)
+                loss_blue2, _ = qmix_blue.update(batch_blue, ep)
+                loss_red2, _ = qmix_red.update(batch_red,ep)
                 wandb.log({
-                        "loss_blue": loss_blue,
-                        "loss_red": loss_red,
+                        "loss_blue": (loss_blue1 + loss_blue2)/2,
+                        "loss_red": (loss_red1 + loss_red2)/2,
                         "epsilon": epsilon,
-                        "loss" : (loss_blue + loss_red)/2
                     })
 
                 qmix_blue.update_target_soft(config.tau)
@@ -300,9 +308,9 @@ def train(config):
                 torch.save(qmix_red.agent_q_network.state_dict(), save_path_red)
                 torch.save(qmix_blue.mixing_network.state_dict(), "mn_blue_ep{}.pth".format(ep))
                 torch.save(qmix_red.mixing_network.state_dict(), "mn_red_ep{}.pth".format(ep))
-                normalizer_obs_b.save("normalizer_obs_b{}.pkl".format(ep))
-                normalizer_obs_r.save("normalizer_obs_r.pkl".format(ep))
-                normalizer_state.save("normalizer_state.pkl".format(ep))
+                # normalizer_obs_b.save("normalizer_obs_b{}.pkl".format(ep))
+                # normalizer_obs_r.save("normalizer_obs_r.pkl".format(ep))
+                # normalizer_state.save("normalizer_state.pkl".format(ep))
             # Check if the save time has passed
         elapsed_time = time.time() - start_time
         if (save_time_seconds - elapsed_time) <= 100:
@@ -315,6 +323,6 @@ def train(config):
             torch.save(qmix_red.mixing_network.state_dict(), 'mn_model_rtarget_after_2_hours.pth')
             break  # Optionally, stop training after saving the model
     wandb.finish()
-    normalizer_obs_b.save("normalizer_obs_b.pkl")
-    normalizer_obs_r.save("normalizer_obs_r.pkl")
-    normalizer_state.save("normalizer_state.pkl")
+    # normalizer_obs_b.save("normalizer_obs_b.pkl")
+    # normalizer_obs_r.save("normalizer_obs_r.pkl")
+    # normalizer_state.save("normalizer_state.pkl")
