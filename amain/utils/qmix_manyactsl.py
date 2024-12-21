@@ -158,12 +158,12 @@ class QNetwork(nn.Module):
         )
         # Calculate the size after CNN layers
         # self._create_fc(observation_shape)
-        self.fc1 = nn.Linear(64+8, 64)
+        self.fc1 = nn.Linear(64+8, 32)
         self.fc2 = nn.Sequential(
             # ResidualFCBlock(64, 64),
             nn.Linear(64, action_shape),
         )
-        self.gru = nn.GRUCell(64, 128)
+        self.gru = nn.GRUCell(32, 64)
 
         self.embed = nn.Embedding(action_shape, 8)
 
@@ -190,7 +190,7 @@ class QNetwork(nn.Module):
             self.cnn_output_dim = dummy_output.view(-1).shape[0]
     
     def init_hidden(self, batch_size, select=False):
-        return torch.zeros(batch_size, 128, device=device)
+        return torch.zeros(batch_size, 64, device=device)
 
     def action_none(self, batch_size):
         return torch.zeros(batch_size, dtype=torch.long, device=device)
@@ -215,7 +215,7 @@ class QNetwork(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
 class MixingNetwork(nn.Module):
-    def __init__(self, num_agents, state_shape=(5, 45, 45), embed_dim=64, use_attention=True):
+    def __init__(self, num_agents, state_shape=(5, 45, 45), embed_dim=32, use_attention=True):
         """
         Mixing network for QMIX with optional attention mechanism.
         
@@ -275,6 +275,7 @@ class MixingNetwork(nn.Module):
         
         # self.attention = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=4, batch_first=True)
         self._initialize_weights()
+        
 
     def _initialize_weights(self):
         for m in self.modules():
@@ -323,7 +324,7 @@ class MixingNetwork(nn.Module):
     def num_params(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
-
+@torch.compile()
 class QMIX:
     """
     QMIX implementation for multi-agent reinforcement learning.
@@ -344,25 +345,30 @@ class QMIX:
         self.device = device
         self.agent_ids = agent_ids
         self.agent_ids1 = agent_ids1
+        self.lambda_ = 0.6
         # Initialize networks
         self.agent_q_networks = nn.ModuleList([QNetwork(observation_shape=(5,13,13), action_shape=21).to(device) for _ in range(9)])
         # self.agent_q_network1 = QNetwork(observation_shape=(5,13,13), action_shape=21).to(device)
         # self.agent_q_network2 = QNetwork(observation_shape=(5,13,13), action_shape=21).to(device)
-        self.mixing_network = MixingNetwork(num_agents, state_shape=state_shape).to(device)
+        self.mixing_network = MixingNetwork(num_agents, state_shape=state_shape)
 
         self.target_agent_q_network = nn.ModuleList([QNetwork(observation_shape=(5,13,13), action_shape=21).to(device) for _ in range(9)])
-        self.target_mixing_network = MixingNetwork(num_agents, state_shape=state_shape).to(device)
-        
+        self.target_mixing_network = MixingNetwork(num_agents, state_shape=state_shape)
+        self.update_target_hard()
         # Compile networks for potential speed-up (PyTorch 2.0+)
         # try:
-        #     self.agent_q_network = torch.compile(self.agent_q_network)
+        #     self.agent_q_networks = torch.compile(self.agent_q_networks)
         #     self.mixing_network = torch.compile(self.mixing_network)
         #     self.target_agent_q_network = torch.compile(self.target_agent_q_network)
         #     self.target_mixing_network = torch.compile(self.target_mixing_network)
         # except Exception as e:
         #     print(f"Compilation failed: {e}. Using regular execution.")
         # # If torch.compile fails (e.g., not using PyTorch 2.0), proceed without compiling
-  
+        self.agent_q_networks.to(device)
+        self.mixing_network.to(device)
+        self.target_agent_q_network.to(device)
+        self.target_mixing_network.to(device)
+
         self.update_target_hard()
         # Optimizer and scheduler
         self.optimizer = optim.Adam(
@@ -377,6 +383,16 @@ class QMIX:
         # Log models with wandb
         # wandb.watch(self.agent_q_network, log_freq=1000)
         # wandb.watch(self.mixing_network, log_freq=1000)
+        self.eligibility_traces = {}
+        for name, param in self.named_parameters():
+            self.eligibility_traces[name] = torch.zeros_like(param.data)
+
+    def named_parameters(self):
+        # Generator for all named parameters
+        for name, param in self.agent_q_networks.named_parameters():
+            yield f'agent_q_{name}', param
+        for name, param in self.mixing_network.named_parameters():
+            yield f'mixing_{name}', param
 
     def select_actions(self, obs: torch.Tensor, prev_action: None, 
                        hidden = None,
@@ -539,24 +555,13 @@ class QMIX:
                     net.zero_grad()
                     # Extract sub-batch for the current episode
                     obs_sb = obs[b: bs, i, count: count+9 ]           # Shape: ( N, H, W, C)
-                    # obs_sb = obs[:,i]           # Shape: (B, N, H, W, C)
-                    # obs_sb = obs_sb.unsqueeze(0)  # Shape: (1, N, H, W, C)
+
 
                     actions_sb = actions[b: bs, i, count:count+9]      # Shape: (N,)
-                    # actions_sb = actions[:, i]      # Shape: (B, N, 1)
-                    # actions_sb = actions_sb.unsqueeze(0)  # Shape: (1, N, 1)
 
-                    # rewards_sb = rewards[b, i+1]      # Shape: (N,)
-                    # # rewards_sb = rewards[:, i+1]      # Shape: (B, N)
-                    # rewards_sb = rewards_sb.unsqueeze(0)  # Shape: (1, N)
 
                     next_obs_sb = obs[b: bs, i+1, count:count+9]    # Shape: (N, H, W, C)
-                    # next_obs_sb = obs[:,i+1]    # Shape: (B, N, H, W, C)
-                    # next_obs_sb = next_obs_sb.unsqueeze(0)  # Shape: (1, N, H, W, C)
 
-                    # done_sb = dones[b, i+1]      # Shape: (N,)
-                    # # done_sb = dones[:, i+1]      # Shape: (B, N)
-                    # done_sb = done_sb.unsqueeze(0)  # Shape: (1, N)
                     if i != 0:
                         prev_actions_sb = actions[b: bs,i-1, count:count+9]  # Shape: (B, N)
                         # prev_actions_sb = prev_actions_sb.unsqueeze(0)  # Shape: (1, N)
@@ -588,15 +593,6 @@ class QMIX:
                         chosen_q_values = q_values.gather(1, chosen_actions).squeeze(1)  # Shape: (sb_size * N)
                         chosen_q_values = chosen_q_values.view(sb_size, N_agents)  # Shape: (sb_size, N)
 
-                        # Compute entropy
-                        # action_probs = F.softmax(q_values.detach(), dim=1)
-                        # entropy = -torch.sum(action_probs * torch.log(action_probs + 1e-10), dim=1)
-                        # entropy = entropy.view(sb_size, N_agents)
-                        # entropy_list.append(entropy.mean())
-                        # entropy regularization
-                        # entropy += -torch.sum(F.softmax(q_values, dim=1) * F.log_softmax(q_values, dim=1), dim=1).mean()/T*(1-done_sb) # (sb_size * N)
-
-                    # Compute Double Q-learning targets
                         with torch.no_grad():
                             if i == 0:
                                 hidden_target = None
@@ -629,8 +625,7 @@ class QMIX:
             # dones_sb = dones_sb.unsqueeze(0)  # Shape: (1, T-1)
             rewards_sb = rewards[b: bs, 1:].contiguous()  # Shape: (1, T-1)
             # rewards_sb = rewards_sb.unsqueeze(0)  # Shape: (1, T-1)
-            # q_evals = q_evals.permute(0, 2, 1).contiguous() # Shape: (sb_size, T-1, N)
-            # q_targets = q_targets.permute(0, 2, 1).contiguous()
+     
 
             q_evals = q_evals.view(-1, *q_evals.shape[2:]).contiguous()  # Shape: (sb_size*(T-1), N)
             q_targets = q_targets.view(-1, *q_targets.shape[2:]).contiguous()
@@ -674,8 +669,17 @@ class QMIX:
                     # Gradient clipping
                     nn.utils.clip_grad_norm_(self.agent_q_networks.parameters(), max_norm=1.0)
                     nn.utils.clip_grad_norm_(self.mixing_network.parameters(), max_norm=1.0)
-
+                    
                     self.optimizer.step()
+                    # Update eligibility traces
+                    for name, param in self.named_parameters():
+                        if param.grad is not None:
+                            # Accumulate gradients
+                            self.eligibility_traces[name] = self.gamma * self.lambda_ * self.eligibility_traces[name] + param.grad.data
+
+                            # Update parameters using eligibility traces
+                            param.data -= self.optimizer.param_groups[0]['lr'] * self.eligibility_traces[name]
+
                     self.scheduler1.step()
                     self.optimizer.zero_grad()
 
@@ -709,19 +713,19 @@ class QMIX:
 
     def num_params(self) -> int:
         # calculate total paramater of AgentQNetwork and MixingNetwork
-        return sum(p.numel() for p in self.agent_q_network.parameters()) + sum(p.numel() for p in self.mixing_network.parameters())
+        return sum(p.numel() for p in self.agent_q_networks.parameters()) + sum(p.numel() for p in self.mixing_network.parameters())
 
 
 
-if __name__ == "__main__":
-    # Initialize environment
-    # device = 
-    share = QNetwork((5, 13, 13), 21).cuda()
-    mixing = MixingNetwork(81)
-    # a = QMIX(5, (45, 45, 5), device)
-    # a = mixing()
-    # print(np.random( 13, 13, 5).shape)32
-    start= time.time()
-    share(torch.rand(1, 5, 13, 13, device="cuda"), action=None)
-    print(share.num_params(), mixing.num_params())
-    print(time.time()-start)
+# if __name__ == "__main__":
+#     # Initialize environment
+#     # device = 
+#     share = QNetwork((5, 13, 13), 21).cuda()
+#     mixing = MixingNetwork(81)
+#     # a = QMIX(5, (45, 45, 5), device)
+#     # a = mixing()
+#     # print(np.random( 13, 13, 5).shape)32
+#     start= time.time()
+#     share(torch.rand(1, 5, 13, 13, device="cuda"), action=None)
+#     print(share.num_params(), mixing.num_params())
+#     print(time.time()-start)

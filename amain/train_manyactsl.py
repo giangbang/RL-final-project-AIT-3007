@@ -55,7 +55,7 @@ def train(config):
     num_envs = 2 
     # env = battle_v4.parallel_env(map_size=30, minimap_mode=False, max_cycles=300, seed=10)
     env = battle_v4.parallel_env(map_size=45, minimap_mode=False, step_reward=-0.08,
-            dead_penalty=-0.16, attack_penalty=-0.08, attack_opponent_reward=0.8, max_cycles=300, 
+            dead_penalty=-0.16, attack_penalty=-0.08, attack_opponent_reward=0.64, max_cycles=300, 
             extra_features=False, seed=config.seed)
     env = ss.black_death_v3(env)
     max_cycles = 300
@@ -72,7 +72,7 @@ def train(config):
 
     qmix_blue = QMIX(num_agents=81, agent_ids=blue_agents, agent_ids1=red_agents, state_shape=(5, 45, 45), device=device, lr=learning_rate, gamma=gamma)
     # qmix_red = QMIX(num_agents=81, agent_ids=red_agents, state_shape=(5, 45, 45), device=device, lr=learning_rate, gamma=gamma)
-    # qmix_blue.agent_q_network.load_state_dict(torch.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/model1/lstmfirst/mn_blue_ep399.pth"))
+    qmix_blue.agent_q_networks.load_state_dict(torch.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/qmix_blue_ep299.pth"))
     # qmix_blue.mixing_network.load_state_dict(torch.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/model1/lstmfirst/qmix_blue_ep399.pth"))
     # qmix_blue.update_target_hard()
 
@@ -117,7 +117,7 @@ def train(config):
             actions_blue, h_b = qmix_blue.select_actions(obs_array_blue,
                                                     prev_action=prev_actions_r,
                                                     hidden=h_b,
-                                                    epsilon=epsilon) # return shape: (N_agents,)
+                                                    epsilon=0) # return shape: (N_agents,)
 
             # actions_red, h_r = qmix_red.select_actions(obs_array_red,
             #                                         prev_action=prev_actions_b,
@@ -126,11 +126,11 @@ def train(config):
             actions_red , h_r = qmix_blue.select_actions1(obs_array_red,
                                                     prev_action=prev_actions_b,
                                                     hidden=h_r,
-                                                    epsilon=epsilon)
+                                                    epsilon=1)
             actions = {**actions_red, **actions_blue}
             # for i, agent in enumerate(blue_agents):
             #     actions[agent] = actions_blue[agent]
-            # for i, agent in enumerate(red_agents):
+            # for i, agent in    enumerate(red_agents):
             #     actions[agent] = actions_red[agent]
 
             # Step environment
@@ -194,11 +194,12 @@ def train(config):
             # epsilon = max(epsilon * epsilon_decay, epsilon_min)
 
         epsilon = max(epsilon * epsilon_decay, epsilon_min)
-        wandb.log({
-        "episode_reward_blue": episode_reward_blue,
-        "episode_reward_red": episode_reward_red,
-        "episode": ep
-        })
+        if ep % 20 == 0:
+            wandb.log({
+            "episode_reward_blue": episode_reward_blue,
+            "episode_reward_red": episode_reward_red,
+            "episode": ep
+            })
         # Save episode to replay buffer
                 # After episode completion, convert transitions to TensorDict
         episode_tensordict = {}
@@ -226,7 +227,7 @@ def train(config):
         del episode_transitions
 
         # Train QMIX
-        if len(replay_buffer) >= batch_size:
+        if len(replay_buffer) >= batch_size and ep>=50:
                 # batch, ids = rb.sample(batch_size)
                 batch = replay_buffer.sample(batch_size)
                 batch = batch.to(device)
@@ -243,11 +244,12 @@ def train(config):
                 # batch_blue, batch_red = process_episodes(batch)
                 # loss_blue2  = qmix_blue.update(batch_blue, ep)
                 # loss_red2  = qmix_red.update(batch_red,ep)
-                wandb.log({
-                        "loss_blue": (loss_blue1 )/2,
-                        "loss_red": (loss_red1  )/2,
-                        "epsilon": epsilon,
-                    })
+                if ep % 20 == 0:
+                    wandb.log({
+                            "loss_blue": loss_blue1,
+                            "loss_red": loss_red1,
+                            "epsilon": epsilon,
+                        })
 
                 qmix_blue.update_target_soft(config.tau)
                 # qmix_red.update_target_soft(config.tau)
@@ -255,14 +257,14 @@ def train(config):
 
                 # rb.update_priorities(ids, priorities)
 
-        if (ep+1) % update_step == 0:
+        if (ep+1) % update_step == 0 and ep>100:
             qmix_blue.update_target_hard()
             # qmix_red.update_target_hard()
              
 
         if ((ep+1) % 50) == 0:
                 save_path_blue = "qmix_blue_ep{}.pth".format(ep)
-                save_path_red = "qmix_red_ep{}.pth".format(ep)
+                # save_path_red = "qmix_red_ep{}.pth".format(ep)
                 torch.save(qmix_blue.agent_q_networks.state_dict(), save_path_blue)
                 # torch.save(qmix_red.agent_q_network.state_dict(), save_path_red)
                 torch.save(qmix_blue.mixing_network.state_dict(), "mn_blue_ep{}.pth".format(ep))
