@@ -10,7 +10,7 @@ from typing import Dict, Tuple, List
 import wandb
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-torch.set_float32_matmul_precision('high')
+torch.set_float32_matmul_precision('medium')
 
 class DepthwiseSeparableConv(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1):
@@ -163,12 +163,12 @@ class QNetwork(nn.Module):
         )
         # Calculate the size after CNN layers
         # self._create_fc(observation_shape)
-        self.fc1 = nn.Linear(128+8, 128)
+        self.fc1 = nn.Linear(128+8, 64)
         self.fc2 = nn.Sequential(
-            ResidualFCBlock(256, 128),
-            nn.Linear(128, action_shape),
+            ResidualFCBlock(128, 64),
+            nn.Linear(64, action_shape),
         )
-        self.gru = nn.GRUCell(128, 256)
+        self.gru = nn.GRUCell(64, 128)
 
         self.embed = nn.Embedding(action_shape, 8)
 
@@ -195,21 +195,27 @@ class QNetwork(nn.Module):
             self.cnn_output_dim = dummy_output.view(-1).shape[0]
     
     def init_hidden(self, batch_size, select=False):
-        return torch.zeros(batch_size, 256, device=device)
+        return torch.zeros(batch_size, 128, device=device)
 
     def action_none(self, batch_size):
         return torch.zeros(batch_size, dtype=torch.long, device=device)
 
 
     def forward(self, x, action, hidden = None):
+        
         x = self.cnn(x)
-        if hidden is None:
-            hidden = self.init_hidden(x.size(0))
-        hidden = hidden.detach()
+
+        # if hidden is None:
+        #     hidden = self.init_hidden(x.size(0))
+        # hidden = hidden.detach()
         if action is None:
             action = self.action_none(x.size(0))
         x = torch.cat([x, self.embed(action)], dim=-1)
+        if hidden is None:
+            hidden = self.init_hidden(x.size(0))
+        hidden = hidden.detach()
         x = self.fc1(x)
+
         hidden = self.gru(x, hidden)
 
         q = self.fc2(hidden)
@@ -220,7 +226,7 @@ class QNetwork(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
 class MixingNetwork(nn.Module):
-    def __init__(self, num_agents, state_shape=(5, 45, 45), embed_dim=64, use_attention=True):
+    def __init__(self, num_agents, state_shape=(5, 45, 45), embed_dim=32, use_attention=True):
         """
         Mixing network for QMIX with optional attention mechanism.
         
@@ -256,14 +262,14 @@ class MixingNetwork(nn.Module):
             # # Downsample 23->12
             # # Downsample 12->6
             # Final reduction 6->1
-            nn.Conv2d(64, 128, kernel_size=6),
-            nn.BatchNorm2d(128),
+            nn.Conv2d(64, 64, kernel_size=6),
+            nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
             nn.Flatten(),
             # ResidualBlock(64, 64),
             # nn.ReLU(inplace=True)
         )
-        self.state_dim = 128
+        self.state_dim = 64
 
         # Hypernetworks for weights
         self.hyper_w_1 = nn.Sequential(
@@ -333,7 +339,7 @@ class MixingNetwork(nn.Module):
     def num_params(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
-
+@torch.compile()
 class QMIX:
     """
     QMIX implementation for multi-agent reinforcement learning.
@@ -355,24 +361,28 @@ class QMIX:
         self.agent_ids = agent_ids
         self.agent_ids1 = agent_ids1
         # Initialize networks
-        self.agent_q_network = QNetwork(observation_shape=(5,13,13), action_shape=21).to(device)
+        self.agent_q_network = QNetwork(observation_shape=(5,13,13), action_shape=21)
         # self.agent_q_network1 = QNetwork(observation_shape=(5,13,13), action_shape=21).to(device)
         # self.agent_q_network2 = QNetwork(observation_shape=(5,13,13), action_shape=21).to(device)
-        self.mixing_network = MixingNetwork(num_agents, state_shape=state_shape).to(device)
+        self.mixing_network = MixingNetwork(num_agents, state_shape=state_shape)
 
-        self.target_agent_q_network = QNetwork(observation_shape=(5,13,13), action_shape=21).to(device)
-        self.target_mixing_network = MixingNetwork(num_agents, state_shape=state_shape).to(device)
+        self.target_agent_q_network = QNetwork(observation_shape=(5,13,13), action_shape=21)
+        self.target_mixing_network = MixingNetwork(num_agents, state_shape=state_shape)
         
         # Compile networks for potential speed-up (PyTorch 2.0+)
-        try:
-            self.agent_q_network = torch.compile(self.agent_q_network)
-            self.mixing_network = torch.compile(self.mixing_network)
-            self.target_agent_q_network = torch.compile(self.target_agent_q_network)
-            self.target_mixing_network = torch.compile(self.target_mixing_network)
-        except Exception as e:
-            print(f"Compilation failed: {e}. Using regular execution.")
+        # try:
+        #     self.agent_q_network = torch.compile(self.agent_q_network)
+        #     self.mixing_network = torch.compile(self.mixing_network)
+        #     self.target_agent_q_network = torch.compile(self.target_agent_q_network)
+        #     self.target_mixing_network = torch.compile(self.target_mixing_network)
+        # except Exception as e:
+        #     print(f"Compilation failed: {e}. Using regular execution.")
         # # If torch.compile fails (e.g., not using PyTorch 2.0), proceed without compiling
-  
+        self.agent_q_network.to(device)
+        self.mixing_network.to(device)
+        self.target_agent_q_network.to(device)
+        self.target_mixing_network.to(device)
+
         self.update_target_hard()
         # Optimizer and scheduler
         self.optimizer = optim.Adam(
@@ -525,6 +535,8 @@ class QMIX:
             q_evals = []
             q_targets = []
             loss = 0
+            hidden = None
+            hidden_target = None
             for i in range(T-1): # Transitions
 
                 # Extract sub-batch for the current episode
@@ -567,6 +579,7 @@ class QMIX:
                     prev_actions_sb_flat = prev_actions_sb.contiguous().view(-1).contiguous()  # Shape: (sb_size * N)
                 else:
                     prev_actions_sb_flat = None
+
                 with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
                         # Compute current Q-values
                     q_values, hidden = self.agent_q_network(obs_sb_flat, prev_actions_sb_flat, hidden=hidden)              # Shape: (sb_size * N, num_actions)

@@ -57,7 +57,7 @@ def train(config):
     # env = battle_v4.parallel_env(map_size=30, minimap_mode=False, max_cycles=300, seed=10)
     env = battle_v4.parallel_env(map_size=45, minimap_mode=False, step_reward=-0.08,
             dead_penalty=-0.16, attack_penalty=-0.08, attack_opponent_reward=0.32, max_cycles=300, 
-            extra_features=False, seed=config.seed)
+            extra_features=False, render_mode="human", seed=config.seed)
     env = ss.black_death_v3(env)
     # num_envs = 4
     env = AsyncPettingZooVecEnv([lambda : env for _ in range(num_envs)])
@@ -75,7 +75,7 @@ def train(config):
 
     qmix_blue = QMIX(num_agents=81, agent_ids=blue_agents, agent_ids1=red_agents, state_shape=(5, 45, 45), device=device, lr=learning_rate, gamma=gamma)
     # qmix_red = QMIX(num_agents=81, agent_ids=red_agents, state_shape=(5, 45, 45), device=device, lr=learning_rate, gamma=gamma)
-    # qmix_blue.agent_q_network.load_state_dict(torch.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/model1/lstmfirst/mn_blue_ep399.pth"))
+    qmix_blue.agent_q_network.load_state_dict(torch.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/aqn_model_bafter_2_hours.pth"))
     # qmix_blue.mixing_network.load_state_dict(torch.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/model1/lstmfirst/qmix_blue_ep399.pth"))
     # qmix_blue.update_target_hard()
 
@@ -120,7 +120,7 @@ def train(config):
             actions_blue, h_b = qmix_blue.select_actions(obs_array_blue,
                                                     prev_action=prev_actions_r,
                                                     hidden=h_b,
-                                                    epsilon=epsilon) # return shape: (N_agents,)
+                                                    epsilon=0) # return shape: (N_agents,)
 
             # actions_red, h_r = qmix_red.select_actions(obs_array_red,
             #                                         prev_action=prev_actions_b,
@@ -129,7 +129,7 @@ def train(config):
             actions_red , h_r = qmix_blue.select_actions1(obs_array_red,
                                                     prev_action=prev_actions_b,
                                                     hidden=h_r,
-                                                    epsilon=epsilon)
+                                                    epsilon=0)
             actions = {**actions_red, **actions_blue}
             # for i, agent in enumerate(blue_agents):
             #     actions[agent] = actions_blue[agent]
