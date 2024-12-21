@@ -10,7 +10,7 @@ from typing import Dict, Tuple, List
 import wandb
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-torch.set_float32_matmul_precision('medium')
+# torch.set_float32_matmul_precision('medium')
 
 class DepthwiseSeparableConv(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1):
@@ -153,7 +153,7 @@ class QNetwork(nn.Module):
 
             DepthwiseSeparableConv(32, 64, stride=2),
             # nn.BatchNorm2d(64),
-            # nn.ReLU(inplace=True),
+            nn.ReLU(inplace=True),
             # nn.MaxPool2d(2),
             # DepthwiseSeparableConv(32, 32, stride=2),
             DepthwiseSeparableConv(64, 64, stride=2),
@@ -163,14 +163,14 @@ class QNetwork(nn.Module):
         )
         # Calculate the size after CNN layers
         # self._create_fc(observation_shape)
-        self.fc1 = nn.Linear(64+4, 128)
+        self.fc1 = nn.Linear(64+8, 128)
         self.fc2 = nn.Sequential(
-            ResidualFCBlock(128, 128),
+            ResidualFCBlock(256, 128),
             nn.Linear(128, action_shape),
         )
-        self.gru = nn.GRUCell(128, 128)
+        self.gru = nn.GRUCell(128, 256)
 
-        self.embed = nn.Embedding(action_shape, 4)
+        self.embed = nn.Embedding(action_shape, 8)
 
         self.initialize_weights()
 
@@ -195,7 +195,7 @@ class QNetwork(nn.Module):
             self.cnn_output_dim = dummy_output.view(-1).shape[0]
     
     def init_hidden(self, batch_size, select=False):
-        return torch.zeros(batch_size, 128, device=device)
+        return torch.zeros(batch_size, 256, device=device)
 
     def action_none(self, batch_size):
         return torch.zeros(batch_size, dtype=torch.long, device=device)
@@ -364,13 +364,13 @@ class QMIX:
         self.target_mixing_network = MixingNetwork(num_agents, state_shape=state_shape).to(device)
         
         # Compile networks for potential speed-up (PyTorch 2.0+)
-        try:
-            self.agent_q_network = torch.compile(self.agent_q_network)
-            self.mixing_network = torch.compile(self.mixing_network)
-            self.target_agent_q_network = torch.compile(self.target_agent_q_network)
-            self.target_mixing_network = torch.compile(self.target_mixing_network)
-        except Exception as e:
-            print(f"Compilation failed: {e}. Using regular execution.")
+        # try:
+        #     self.agent_q_network = torch.compile(self.agent_q_network)
+        #     self.mixing_network = torch.compile(self.mixing_network)
+        #     self.target_agent_q_network = torch.compile(self.target_agent_q_network)
+        #     self.target_mixing_network = torch.compile(self.target_mixing_network)
+        # except Exception as e:
+        #     print(f"Compilation failed: {e}. Using regular execution.")
         # # If torch.compile fails (e.g., not using PyTorch 2.0), proceed without compiling
   
         self.update_target_hard()
@@ -402,7 +402,6 @@ class QMIX:
             Dict[str, int]: Mapping from agent IDs to selected actions.
         """
         # Add batch dimension
-      
         obs = torch.tensor(obs, dtype=torch.float32, device=self.device)  # Shape: (H, W, C)
         # obs = obs.unsqueeze(0)  # Shape: (1, H, W, c)
         B, H, W, C = obs.shape
@@ -411,9 +410,9 @@ class QMIX:
             prev_action = torch.tensor(prev_action, dtype=torch.long, device=self.device)  # Shape: 
         # else:
         #     prev_action = torch.zeros(1, dtype=torch.long, device=self.device)
-        with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-            with torch.no_grad():
-                q_values, hidden = self.agent_q_network(obs, prev_action, hidden)  # Shape: (num_actions)
+        # with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+        with torch.no_grad():
+            q_values, hidden = self.agent_q_network(obs, prev_action, hidden)  # Shape: (num_actions)
         
         # for agent in self.agent_ids:
         if torch.rand(1).item() < epsilon:
@@ -449,9 +448,10 @@ class QMIX:
             prev_action = torch.tensor(prev_action, dtype=torch.long, device=self.device)  # Shape: 
         # else:
         #     prev_action = torch.zeros(1, dtype=torch.long, device=self.device)
-        with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-            with torch.no_grad():
-                q_values, hidden = self.agent_q_network(obs, prev_action, hidden)  # Shape: (num_actions)
+
+        # with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+        with torch.no_grad():
+            q_values, hidden = self.agent_q_network(obs, prev_action, hidden)  # Shape: (num_actions)
         
         # for agent in self.agent_ids:
         if torch.rand(1).item() < epsilon:
@@ -504,7 +504,7 @@ class QMIX:
         q_targets = []
         loss = 0
         entropy = 0
-        bs =  2
+        bs =  4
         for b in range(0, B, bs):
             bs = b+bs
             if bs > B:
@@ -554,23 +554,23 @@ class QMIX:
                     prev_actions_sb_flat = prev_actions_sb.contiguous().view(-1).contiguous()  # Shape: (sb_size * N)
                 else:
                     prev_actions_sb_flat = None
-                with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                # with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
                     # Compute current Q-values
-                    q_values, hidden = self.agent_q_network(obs_sb_flat, prev_actions_sb_flat, hidden=hidden)              # Shape: (sb_size * N, num_actions)
-                    chosen_actions = actions_sb_flat.unsqueeze(1)             # Shape: (sb_size * N, 1)
-                    chosen_q_values = q_values.gather(1, chosen_actions).squeeze(1)  # Shape: (sb_size * N)
-                    chosen_q_values = chosen_q_values.view(sb_size, N_agents)  # Shape: (sb_size, N)
+                q_values, hidden = self.agent_q_network(obs_sb_flat, prev_actions_sb_flat, hidden=hidden)              # Shape: (sb_size * N, num_actions)
+                chosen_actions = actions_sb_flat.unsqueeze(1)             # Shape: (sb_size * N, 1)
+                chosen_q_values = q_values.gather(1, chosen_actions).squeeze(1)  # Shape: (sb_size * N)
+                chosen_q_values = chosen_q_values.view(sb_size, N_agents)  # Shape: (sb_size, N)
 
-                    
-                    # entropy regularization
-                    # entropy += -torch.sum(F.softmax(q_values, dim=1) * F.log_softmax(q_values, dim=1), dim=1).mean()/T*(1-done_sb) # (sb_size * N)
+                
+                # entropy regularization
+                # entropy += -torch.sum(F.softmax(q_values, dim=1) * F.log_softmax(q_values, dim=1), dim=1).mean()/T*(1-done_sb) # (sb_size * N)
 
-                # Compute Double Q-learning targets
-                    with torch.no_grad():
-                        target_q_values, hidden_target = self.target_agent_q_network(next_obs_sb_flat, actions_sb_flat, hidden=hidden_target)  # (sb_size*N, num_actions)
-                        _, max_actions = target_q_values.max(dim=1)  # (sb_size*N,)
-                        max_target_q_values = target_q_values.gather(1, max_actions.unsqueeze(1)).squeeze(1)  # (sb_size*N,)
-                        max_target_q_values = max_target_q_values.view(sb_size, N_agents)  # (episodes, agents)
+            # Compute Double Q-learning targets
+                with torch.no_grad():
+                    target_q_values, hidden_target = self.target_agent_q_network(next_obs_sb_flat, actions_sb_flat, hidden=hidden_target)  # (sb_size*N, num_actions)
+                    _, max_actions = target_q_values.max(dim=1)  # (sb_size*N,)
+                    max_target_q_values = target_q_values.gather(1, max_actions.unsqueeze(1)).squeeze(1)  # (sb_size*N,)
+                    max_target_q_values = max_target_q_values.view(sb_size, N_agents)  # (episodes, agents)
 
                 q_evals.append(chosen_q_values)
                 q_targets.append(max_target_q_values)
@@ -602,36 +602,36 @@ class QMIX:
             n_s = n_s.view(-1, *n_s.shape[2:]).contiguous()
             
             # Compute Q_tot and target Q_tot
-            with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-                q_tot = self.mixing_network(q_evals, s)  # Shape: (sb_size, transitions)
-                # q_tot = q_tot.squeeze(1)  # Shape: (sb_size,)
+            # with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+            q_tot = self.mixing_network(q_evals, s)  # Shape: (sb_size, transitions)
+            # q_tot = q_tot.squeeze(1)  # Shape: (sb_size,)
 
-                with torch.no_grad():
-                    target_q_tot = self.target_mixing_network(q_targets, n_s)  # Shape: (sb_size, transitions)
-                    # Compute targets
-                    # target_q_tot = target_q_tot.squeeze(1)  # Shape: (sb_size,)
-                    rewards_sb = rewards_sb.view(-1, 1)  # Shape: (sb_size,)
-                    dones_sb = dones_sb.view(-1, 1)  # Shape: (sb_size,)
-                    targets = rewards_sb + self.gamma * (1 - dones_sb) * target_q_tot  # Shape: (sb_size, 1)
+            with torch.no_grad():
+                target_q_tot = self.target_mixing_network(q_targets, n_s)  # Shape: (sb_size, transitions)
+                # Compute targets
+                # target_q_tot = target_q_tot.squeeze(1)  # Shape: (sb_size,)
+                rewards_sb = rewards_sb.view(-1, 1)  # Shape: (sb_size,)
+                dones_sb = dones_sb.view(-1, 1)  # Shape: (sb_size,)
+                targets = rewards_sb + self.gamma * (1 - dones_sb) * target_q_tot  # Shape: (sb_size, 1)
 
-                masked_td = (q_tot - targets)*(1-dones_sb)  # Shape: (sb_size, 1)
-                done_sum = torch.sum(1-dones_sb, dtype=torch.float32)
-                if done_sum:
-                    loss += (masked_td ** 2).sum()/done_sum/B  # Shape: (1,)
-                    # entropy += -torch.sum(F.softmax(q_values, dim=1) * F.log_softmax(q_values, dim=1), dim=1).mean()/done_sum*(1-done_sb)/B # (sb_size * N)
-                    # loss += 0.03*entropy
-    # loss = loss/obs.size(0)
-                    loss.backward()
+            masked_td = (q_tot - targets)*(1-dones_sb)  # Shape: (sb_size, 1)
+            done_sum = torch.sum(1-dones_sb, dtype=torch.float32)
+            if done_sum:
+                loss += (masked_td ** 2).sum()/done_sum/B  # Shape: (1,)
+                # entropy += -torch.sum(F.softmax(q_values, dim=1) * F.log_softmax(q_values, dim=1), dim=1).mean()/done_sum*(1-done_sb)/B # (sb_size * N)
+                # loss += 0.03*entropy
+# loss = loss/obs.size(0)
+                loss.backward()
 
-                    # Gradient clipping
-                    nn.utils.clip_grad_norm_(self.agent_q_network.parameters(), max_norm=1.0)
-                    nn.utils.clip_grad_norm_(self.mixing_network.parameters(), max_norm=1.0)
+                # Gradient clipping
+                nn.utils.clip_grad_norm_(self.agent_q_network.parameters(), max_norm=1.0)
+                nn.utils.clip_grad_norm_(self.mixing_network.parameters(), max_norm=1.0)
 
-                    self.optimizer.step()
-                    self.scheduler1.step()
-                    self.optimizer.zero_grad()
+                self.optimizer.step()
+                self.scheduler1.step()
+                self.optimizer.zero_grad()
 
-                    total_loss += loss
+                total_loss += loss
         # Free up GPU memory
         del obs_sb, actions_sb,  next_obs_sb 
         del obs_sb_flat, actions_sb_flat, next_obs_sb_flat
