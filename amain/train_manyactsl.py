@@ -56,7 +56,7 @@ def train(config):
     # env = battle_v4.parallel_env(map_size=30, minimap_mode=False, max_cycles=300, seed=10)
     env = battle_v4.parallel_env(map_size=45, minimap_mode=False, step_reward=-0.08,
             dead_penalty=-0.16, attack_penalty=-0.08, attack_opponent_reward=0.64, max_cycles=300, 
-            extra_features=False, seed=config.seed)
+            extra_features=False, render_mode="human", seed=config.seed)
     env = ss.black_death_v3(env)
     max_cycles = 300
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
