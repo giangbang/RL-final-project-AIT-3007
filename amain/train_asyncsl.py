@@ -56,12 +56,12 @@ def train(config):
     num_envs = 4
     # env = battle_v4.parallel_env(map_size=30, minimap_mode=False, max_cycles=300, seed=10)
     env = battle_v4.parallel_env(map_size=45, minimap_mode=False, step_reward=-0.08,
-            dead_penalty=-0.2, attack_penalty=-0.1, attack_opponent_reward=1.6, max_cycles=30, 
+            dead_penalty=-0.16, attack_penalty=-0.08, attack_opponent_reward=0.32, max_cycles=300, 
             extra_features=False, seed=config.seed)
     env = ss.black_death_v3(env)
-    num_envs = 4
+    # num_envs = 4
     env = AsyncPettingZooVecEnv([lambda : env for _ in range(num_envs)])
-    max_cycles = 30
+    max_cycles = 300
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     env.reset()
     blue_agents = [agent for agent in env.possible_agents if agent.startswith("blue_")]
@@ -79,7 +79,7 @@ def train(config):
     # qmix_blue.mixing_network.load_state_dict(torch.load("/home284/284-home/UET/RL-final-UET/RL-final-project-AIT-3007/model1/lstmfirst/qmix_blue_ep399.pth"))
     # qmix_blue.update_target_hard()
 
-    buffer_size = 100
+    buffer_size = 80
     tempdir = tempfile.TemporaryDirectory(dir="/home/trnmah/284-home/tmp")
     replay_buffer = TensorDictReplayBuffer(
         storage=LazyMemmapStorage(buffer_size, scratch_dir=tempdir.name),

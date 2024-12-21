@@ -10,7 +10,7 @@ from typing import Dict, Tuple, List
 import wandb
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-# torch.set_float32_matmul_precision('medium')
+torch.set_float32_matmul_precision('high')
 
 class DepthwiseSeparableConv(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1):
@@ -156,14 +156,14 @@ class QNetwork(nn.Module):
             nn.ReLU(inplace=True),
             # nn.MaxPool2d(2),
             # DepthwiseSeparableConv(32, 32, stride=2),
-            DepthwiseSeparableConv(64, 64, stride=2),
-            nn.BatchNorm2d(64),
+            DepthwiseSeparableConv(64, 128, stride=2),
+            nn.BatchNorm2d(128),
             nn.ReLU(inplace=True),
             nn.Flatten(),
         )
         # Calculate the size after CNN layers
         # self._create_fc(observation_shape)
-        self.fc1 = nn.Linear(64+8, 128)
+        self.fc1 = nn.Linear(128+8, 128)
         self.fc2 = nn.Sequential(
             ResidualFCBlock(256, 128),
             nn.Linear(128, action_shape),
@@ -245,7 +245,7 @@ class MixingNetwork(nn.Module):
 
             nn.MaxPool2d(2),
 
-            DepthwiseSeparableConv(32, 32, stride=2),
+            ResidualBlock(32, 64, stride=2),
             # nn.BatchNorm2d(64),
             # nn.ReLU(inplace=True),
             # DepthwiseSeparableConv(64, 128, stride=2),
@@ -256,14 +256,14 @@ class MixingNetwork(nn.Module):
             # # Downsample 23->12
             # # Downsample 12->6
             # Final reduction 6->1
-            nn.Conv2d(32, 64, kernel_size=6),
-            nn.BatchNorm2d(64),
+            nn.Conv2d(64, 128, kernel_size=6),
+            nn.BatchNorm2d(128),
             nn.ReLU(inplace=True),
             nn.Flatten(),
             # ResidualBlock(64, 64),
             # nn.ReLU(inplace=True)
         )
-        self.state_dim = 64
+        self.state_dim = 128
 
         # Hypernetworks for weights
         self.hyper_w_1 = nn.Sequential(
@@ -364,13 +364,13 @@ class QMIX:
         self.target_mixing_network = MixingNetwork(num_agents, state_shape=state_shape).to(device)
         
         # Compile networks for potential speed-up (PyTorch 2.0+)
-        # try:
-        #     self.agent_q_network = torch.compile(self.agent_q_network)
-        #     self.mixing_network = torch.compile(self.mixing_network)
-        #     self.target_agent_q_network = torch.compile(self.target_agent_q_network)
-        #     self.target_mixing_network = torch.compile(self.target_mixing_network)
-        # except Exception as e:
-        #     print(f"Compilation failed: {e}. Using regular execution.")
+        try:
+            self.agent_q_network = torch.compile(self.agent_q_network)
+            self.mixing_network = torch.compile(self.mixing_network)
+            self.target_agent_q_network = torch.compile(self.target_agent_q_network)
+            self.target_mixing_network = torch.compile(self.target_mixing_network)
+        except Exception as e:
+            print(f"Compilation failed: {e}. Using regular execution.")
         # # If torch.compile fails (e.g., not using PyTorch 2.0), proceed without compiling
   
         self.update_target_hard()
@@ -380,9 +380,19 @@ class QMIX:
             lr=lr,
         )
         self.scheduler1 = optim.lr_scheduler.StepLR(
-            self.optimizer, step_size=200, gamma=0.9
+            self.optimizer, step_size=300, gamma=0.9
         )
+        self.lambda_ = 0.5
+        self.eligibility_traces = {}
+        for name, param in self.named_parameters():
+            self.eligibility_traces[name] = torch.zeros_like(param.data)
 
+    def named_parameters(self):
+        # Generator for all named parameters
+        for name, param in self.agent_q_network.named_parameters():
+            yield f'agent_q_{name}', param
+        for name, param in self.mixing_network.named_parameters():
+            yield f'mixing_{name}', param
         # self.loss_fn = nn.MSELoss().to(device)
         # Log models with wandb
         # wandb.watch(self.agent_q_network, log_freq=1000)
@@ -408,7 +418,7 @@ class QMIX:
         obs = obs.permute(0, 1, 4, 2, 3).contiguous()        # Shape: (B, N, C, H, W)
         obs = obs.view(-1,C,H,W).contiguous()
         if prev_action is not None:
-            prev_action = torch.tensor([prev_action], dtype=torch.long, device=self.device)  # Shape: 
+            prev_action = torch.tensor(prev_action, dtype=torch.long, device=self.device)  # Shape: 
             prev_action = prev_action.view(-1)
         # else:
         #     prev_action = torch.zeros(1, dtype=torch.long, device=self.device)
@@ -448,7 +458,7 @@ class QMIX:
         obs = obs.permute(0, 1, 4, 2, 3).contiguous()        # Shape: (B, N, C, H, W)
         obs = obs.view(-1,C,H,W).contiguous()
         if prev_action is not None:
-            prev_action = torch.tensor([prev_action], dtype=torch.long, device=self.device)  # Shape: 
+            prev_action = torch.tensor(prev_action, dtype=torch.long, device=self.device)  # Shape: 
             prev_action = prev_action.view(-1)
         # else:
         #     prev_action = torch.zeros(1, dtype=torch.long, device=self.device)
@@ -507,7 +517,7 @@ class QMIX:
         q_targets = []
         loss = 0
         entropy = 0
-        bs =  4
+        bs =  2
         for b in range(0, B, bs):
             bs = b+bs
             if bs > B:
@@ -557,23 +567,23 @@ class QMIX:
                     prev_actions_sb_flat = prev_actions_sb.contiguous().view(-1).contiguous()  # Shape: (sb_size * N)
                 else:
                     prev_actions_sb_flat = None
-                # with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-                    # Compute current Q-values
-                q_values, hidden = self.agent_q_network(obs_sb_flat, prev_actions_sb_flat, hidden=hidden)              # Shape: (sb_size * N, num_actions)
-                chosen_actions = actions_sb_flat.unsqueeze(1)             # Shape: (sb_size * N, 1)
-                chosen_q_values = q_values.gather(1, chosen_actions).squeeze(1)  # Shape: (sb_size * N)
-                chosen_q_values = chosen_q_values.view(sb_size, N_agents)  # Shape: (sb_size, N)
+                with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                        # Compute current Q-values
+                    q_values, hidden = self.agent_q_network(obs_sb_flat, prev_actions_sb_flat, hidden=hidden)              # Shape: (sb_size * N, num_actions)
+                    chosen_actions = actions_sb_flat.unsqueeze(1)             # Shape: (sb_size * N, 1)
+                    chosen_q_values = q_values.gather(1, chosen_actions).squeeze(1)  # Shape: (sb_size * N)
+                    chosen_q_values = chosen_q_values.view(sb_size, N_agents)  # Shape: (sb_size, N)
 
-                
-                # entropy regularization
-                # entropy += -torch.sum(F.softmax(q_values, dim=1) * F.log_softmax(q_values, dim=1), dim=1).mean()/T*(1-done_sb) # (sb_size * N)
+                    
+                    # entropy regularization
+                    # entropy += -torch.sum(F.softmax(q_values, dim=1) * F.log_softmax(q_values, dim=1), dim=1).mean()/T*(1-done_sb) # (sb_size * N)
 
-            # Compute Double Q-learning targets
-                with torch.no_grad():
-                    target_q_values, hidden_target = self.target_agent_q_network(next_obs_sb_flat, actions_sb_flat, hidden=hidden_target)  # (sb_size*N, num_actions)
-                    _, max_actions = target_q_values.max(dim=1)  # (sb_size*N,)
-                    max_target_q_values = target_q_values.gather(1, max_actions.unsqueeze(1)).squeeze(1)  # (sb_size*N,)
-                    max_target_q_values = max_target_q_values.view(sb_size, N_agents)  # (episodes, agents)
+                # Compute Double Q-learning targets
+                    with torch.no_grad():
+                        target_q_values, hidden_target = self.target_agent_q_network(next_obs_sb_flat, actions_sb_flat, hidden=hidden_target)  # (sb_size*N, num_actions)
+                        _, max_actions = target_q_values.max(dim=1)  # (sb_size*N,)
+                        max_target_q_values = target_q_values.gather(1, max_actions.unsqueeze(1)).squeeze(1)  # (sb_size*N,)
+                        max_target_q_values = max_target_q_values.view(sb_size, N_agents)  # (episodes, agents)
 
                 q_evals.append(chosen_q_values)
                 q_targets.append(max_target_q_values)
@@ -605,34 +615,42 @@ class QMIX:
             n_s = n_s.view(-1, *n_s.shape[2:]).contiguous()
             
             # Compute Q_tot and target Q_tot
-            # with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-            q_tot = self.mixing_network(q_evals, s)  # Shape: (sb_size, transitions)
-            # q_tot = q_tot.squeeze(1)  # Shape: (sb_size,)
+            with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                q_tot = self.mixing_network(q_evals, s)  # Shape: (sb_size, transitions)
+                # q_tot = q_tot.squeeze(1)  # Shape: (sb_size,)
 
-            with torch.no_grad():
-                target_q_tot = self.target_mixing_network(q_targets, n_s)  # Shape: (sb_size, transitions)
-                # Compute targets
-                # target_q_tot = target_q_tot.squeeze(1)  # Shape: (sb_size,)
-                rewards_sb = rewards_sb.view(-1, 1)  # Shape: (sb_size,)
-                dones_sb = dones_sb.view(-1, 1)  # Shape: (sb_size,)
-                targets = rewards_sb + self.gamma * (1 - dones_sb) * target_q_tot  # Shape: (sb_size, 1)
+                with torch.no_grad():
+                    target_q_tot = self.target_mixing_network(q_targets, n_s)  # Shape: (sb_size, transitions)
+                    # Compute targets
+                    # target_q_tot = target_q_tot.squeeze(1)  # Shape: (sb_size,)
+                    rewards_sb = rewards_sb.view(-1, 1)  # Shape: (sb_size,)
+                    dones_sb = dones_sb.view(-1, 1)  # Shape: (sb_size,)
+                    targets = rewards_sb + self.gamma * (1 - dones_sb) * target_q_tot  # Shape: (sb_size, 1)
 
-            masked_td = (q_tot - targets)*(1-dones_sb)  # Shape: (sb_size, 1)
-            done_sum = torch.sum(1-dones_sb, dtype=torch.float32)
-            if done_sum:
-                loss += (masked_td ** 2).sum()/done_sum/B  # Shape: (1,)
-                # entropy += -torch.sum(F.softmax(q_values, dim=1) * F.log_softmax(q_values, dim=1), dim=1).mean()/done_sum*(1-done_sb)/B # (sb_size * N)
-                # loss += 0.03*entropy
-# loss = loss/obs.size(0)
-                loss.backward()
+                masked_td = (q_tot - targets)*(1-dones_sb)  # Shape: (sb_size, 1)
+                done_sum = torch.sum(1-dones_sb, dtype=torch.float32)
+                if done_sum:
+                    loss += (masked_td ** 2).sum()/done_sum/B  # Shape: (1,)
+                    # entropy += -torch.sum(F.softmax(q_values, dim=1) * F.log_softmax(q_values, dim=1), dim=1).mean()/done_sum*(1-done_sb)/B # (sb_size * N)
+                    # loss += 0.03*entropy
+    # loss = loss/obs.size(0)
+                    loss.backward()
 
-                # Gradient clipping
-                nn.utils.clip_grad_norm_(self.agent_q_network.parameters(), max_norm=1.0)
-                nn.utils.clip_grad_norm_(self.mixing_network.parameters(), max_norm=1.0)
+                    # Gradient clipping
+                    nn.utils.clip_grad_norm_(self.agent_q_network.parameters(), max_norm=1.0)
+                    nn.utils.clip_grad_norm_(self.mixing_network.parameters(), max_norm=1.0)
+            
+                    
+                    self.optimizer.step()
+                    for name, param in self.named_parameters():
+                        if param.grad is not None:
+                            # Accumulate gradients
+                            self.eligibility_traces[name] = self.gamma * self.lambda_ * self.eligibility_traces[name] + param.grad.data
 
-                self.optimizer.step()
-                self.scheduler1.step()
-                self.optimizer.zero_grad()
+                            # Update parameters using eligibility traces
+                            param.data -= self.optimizer.param_groups[0]['lr'] * self.eligibility_traces[name]
+                    self.scheduler1.step()
+                    self.optimizer.zero_grad()
 
                 total_loss += loss
         # Free up GPU memory
