@@ -168,7 +168,7 @@ class DQNAgent:
         print(f"Model checkpoint saved at episode {episode}")
 
     def save_model(self):
-        weights_dir = Path("weights_models")
+        weights_dir = Path("weight_models")
         
         # Save model
         model_path = weights_dir / "blue.pt"

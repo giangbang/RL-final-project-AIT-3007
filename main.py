@@ -16,7 +16,7 @@ class Config:
     fps: int = 35
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     video_dir: str = "video"
-    weights_dir: str = "weights_models"
+    weights_dir: str = "weight_models"
 
 class VideoRecorder:
     def __init__(self, config: Config):
