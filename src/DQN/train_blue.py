@@ -8,7 +8,7 @@ from typing import Dict, Tuple, Optional
 from pathlib import Path
 import logging
 from magent2.environments import battle_v4
-from src.DQN.torch_model import QNetwork
+from torch_model import QNetwork
 from torch.utils.data import Dataset, DataLoader
 
 @dataclass
