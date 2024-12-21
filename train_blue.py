@@ -16,14 +16,14 @@ import sys
 @dataclass
 class Config:
     """Configuration parameters"""
-    batch_size: int = 64
+    batch_size: int = 512
     gamma: float = 0.99
     target_update_freq: int = 1000
     train_freq: int = 4
     epsilon_start: float = 1.0
     epsilon_end: float = 0.1
     epsilon_decay: float = 0.995
-    num_episodes: int = 800
+    num_episodes: int = 500
     buffer_capacity: int = 10000
     learning_rate: float = 1e-4
     checkpoint_freq: int = 100
