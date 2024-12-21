@@ -1,199 +1,196 @@
 import torch
 import torch.nn.functional as F
+import torch.optim as optim
 import numpy as np
-import random
+from dataclasses import dataclass
 from collections import deque
+from typing import Dict, Tuple, Optional
+from pathlib import Path
+import logging
 from magent2.environments import battle_v4
 from torch_model import QNetwork
-import torch.optim as optim
-from final_torch_model import QNetwork as FinalQNetwork
-import time
+from torch.utils.data import Dataset, DataLoader
 
-class ReplayBuffer:
-    def __init__(self, capacity):
+@dataclass
+class Config:
+    """Configuration parameters"""
+    batch_size: int = 512
+    gamma: float = 0.99
+    target_update_freq: int = 1000
+    train_freq: int = 4
+    epsilon_start: float = 1.0
+    epsilon_end: float = 0.01
+    epsilon_decay: float = 0.99
+    num_episodes: int = 500
+    buffer_capacity: int = 20000
+    learning_rate: float = 1e-4
+    checkpoint_freq: int = 100
+    map_size: int = 45
+    max_cycles: int = 300
+
+class ReplayBuffer(Dataset):
+    """Experience replay buffer implementation"""
+    def __init__(self, capacity: int):
+        self.capacity = capacity
         self.buffer = deque(maxlen=capacity)
-
+    
     def add(self, state, action, reward, next_state, done):
         self.buffer.append((state, action, reward, next_state, done))
-
-    def sample(self, batch_size):
-        batch = random.sample(self.buffer, batch_size)
-        states, actions, rewards, next_states, dones = zip(*batch)
-        return (
-            np.array(states),
-            np.array(actions),
-            np.array(rewards),
-            np.array(next_states),
-            np.array(dones),
-        )
-
+    
     def __len__(self):
         return len(self.buffer)
-
-def initialize_environment():
-    return battle_v4.env(map_size=45, max_cycles=300)
-
-def initialize_q_network(env, device):
-    obs_space = env.observation_space("blue_0").shape
-    act_space = env.action_space("blue_0").n
-    return QNetwork(obs_space, act_space).to(device)
-
-def preprocess_state(state, device):
-    state = np.array(state)
-    return torch.from_numpy(state).float().permute(2, 0, 1).unsqueeze(0).to(device)
-
-def train(env, q_network, target_network, optimizer, replay_buffer, red_final_policy, device, config):
-    start_time = time.time()
-    time_limit = 7200  # 2 hours
-    epsilon = config['epsilon_start']
-    step_count = 0
-    best_reward = float('-inf')
-    rewards_history = []
     
-    for episode in range(config['num_episodes']):
-        if time.time() - start_time > time_limit:
-            print(f"Time limit of 2 hours reached")
-            torch.save(q_network.state_dict(), "blue_final.pt")
-            return
-            
-        env.reset()
-        total_reward = 0
-        done = {agent: False for agent in env.agents}
+    def __getitem__(self, idx):
+        state, action, reward, next_state, done = self.buffer[idx]
+        return (
+            torch.FloatTensor(state).permute(2, 0, 1),
+            torch.LongTensor([action]),
+            torch.FloatTensor([reward]),
+            torch.FloatTensor(next_state).permute(2, 0, 1),
+            torch.FloatTensor([done])
+        )
 
-        while not all(done.values()):
-            for agent in env.agent_iter():
-                obs, reward, termination, truncation, _ = env.last()
-                agent_team = agent.split("_")[0]
-
-                if termination or truncation:
-                    action = None
-                    done[agent] = True
-                else:
-                    if agent_team == "blue":
-                        action = select_action(obs, epsilon)
-                        next_obs = env.observe(agent)
-                        replay_buffer.add(obs, action, reward, next_obs, termination or truncation)
-                        step_count += 1
-                        total_reward += reward
-                        
-                        if step_count % config['train_freq'] == 0:
-                            optimize_model()
-                    else:
-                        action = red_final_policy(obs)
-
-                env.step(action)
-
-        # Update epsilon
-        epsilon = max(config['epsilon_end'], epsilon * config['epsilon_decay'])
+class DQNAgent:
+    """DQN Agent implementation"""
+    def __init__(self, config: Config):
+        self.config = config
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.env = battle_v4.env(map_size=config.map_size, max_cycles=config.max_cycles)
         
-        # Update target network
-        if step_count % config['target_update_freq'] == 0:
-            target_network.load_state_dict(q_network.state_dict())
-            
-        # Track best model
-        if total_reward > best_reward:
-            best_reward = total_reward
-            torch.save(q_network.state_dict(), "blue_best.pt")
-            
-        rewards_history.append(total_reward)
+        # Initialize networks
+        self.q_network = QNetwork(
+            self.env.observation_space("blue_0").shape,
+            self.env.action_space("blue_0").n
+        ).to(self.device)
         
-        # Logging
-        if episode % 10 == 0:
-            elapsed_time = time.time() - start_time
-            avg_reward = np.mean(rewards_history[-10:])
-            print(f"Episode {episode}/{config['num_episodes']}")
-            print(f"Time: {elapsed_time/3600:.1f}h")
-            print(f"Avg Reward: {avg_reward:.2f}")
-            print(f"Epsilon: {epsilon:.4f}")
-            print(f"Buffer size: {len(replay_buffer)}")
-            print("-" * 50)
-            
-        # Save checkpoint
-        if (episode + 1) % 100 == 0:
-            torch.save(q_network.state_dict(), f"blue_checkpoint_{episode+1}.pt")
+        self.target_network = QNetwork(
+            self.env.observation_space("blue_0").shape,
+            self.env.action_space("blue_0").n
+        ).to(self.device)
+        self.target_network.load_state_dict(self.q_network.state_dict())
+        self.target_network.eval()
+        
+        self.optimizer = optim.Adam(self.q_network.parameters(), lr=config.learning_rate)
+        self.replay_buffer = ReplayBuffer(capacity=config.buffer_capacity)
+        self.epsilon = config.epsilon_start
+        self.step_count = 0
 
-def main():
-    # Initialize environment and devices
-    env = initialize_environment()
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    # Initialize Q-networks
-    q_network = initialize_q_network(env, device)
-    target_network = initialize_q_network(env, device)
-    target_network.load_state_dict(q_network.state_dict())
-    target_network.eval()
-
-    red_final_network = FinalQNetwork(
-        env.observation_space("red_0").shape, 
-        env.action_space("red_0").n
-    ).to(device)
-    red_final_network.load_state_dict(
-        torch.load("red_final.pt", map_location=device)
-    )
-    red_final_network.eval()
-
-    def red_final_policy(obs):
-        observation = torch.tensor(obs, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0).to(device)
+    def select_action(self, state: np.ndarray) -> int:
+        """Select action using epsilon-greedy policy"""
+        if np.random.rand() < self.epsilon:
+            return self.env.action_space("blue_0").sample()
+        
+        state_tensor = torch.tensor(state).float().permute(2, 0, 1).unsqueeze(0).to(self.device)
         with torch.no_grad():
-            q_values = red_final_network(observation)
+            q_values = self.q_network(state_tensor)
         return q_values.argmax().item()
 
-    # Optimizer and Replay Buffer
-    optimizer = optim.Adam(q_network.parameters(), lr=1e-4)
-    replay_buffer = ReplayBuffer(capacity=10000)
+    def optimize_model(self):
+        """Perform one step of optimization"""
+        train_loader = DataLoader(
+            self.replay_buffer,
+            batch_size=self.config.batch_size,
+            shuffle=True
+        )
+        
+        for states, actions, rewards, next_states, dones in train_loader:
+            states = states.to(self.device)
+            actions = actions.to(self.device)
+            rewards = rewards.to(self.device)
+            next_states = next_states.to(self.device)
+            dones = dones.to(self.device)
 
-    # Hyperparameters
-    config = {
-        'batch_size': 64,
-        'gamma': 0.99,
-        'target_update_freq': 1000,
-        'train_freq': 4,
-        'epsilon_start': 1.0,
-        'epsilon_end': 0.1,
-        'epsilon_decay': 0.995,
-        'num_episodes': 800
-    }
-    epsilon = config['epsilon_start']
-    step_count = 0
-
-    def select_action(state, epsilon):
-        if np.random.rand() < epsilon:
-            return env.action_space("blue_0").sample()
-        else:
-            state_tensor = preprocess_state(state, device)
+            q_values = self.q_network(states).gather(1, actions)
             with torch.no_grad():
-                q_values = q_network(state_tensor)
-            return q_values.argmax().item()
+                next_q_values = self.target_network(next_states).max(1)[0].unsqueeze(1)
+            target_q_values = rewards + self.config.gamma * next_q_values * (1 - dones)
 
-    def optimize_model():
-        if len(replay_buffer) < config['batch_size']:
-            return
-        states, actions, rewards, next_states, dones = replay_buffer.sample(config['batch_size'])
+            loss = F.mse_loss(q_values, target_q_values)
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
 
-        states = torch.tensor(states).float().permute(0, 3, 1, 2).to(device)
-        next_states = torch.tensor(next_states).float().permute(0, 3, 1, 2).to(device)
-        actions = torch.tensor(actions).long().unsqueeze(1).to(device)
-        rewards = torch.tensor(rewards).float().to(device)
-        dones = torch.tensor(dones).float().to(device)
+    def train(self):
+        """Main training loop"""
+        logging.info("Starting training...")
+        
+        for episode in range(self.config.num_episodes):
+            self.env.reset()
+            total_reward = 0
+            done = {agent: False for agent in self.env.agents}
+            observations = {}
 
-        q_values = q_network(states).gather(1, actions)
-        with torch.no_grad():
-            next_q_values = target_network(next_states).max(1)[0]
-        target_q_values = rewards + config['gamma'] * next_q_values * (1 - dones)
+            while not all(done.values()):
+                for agent in self.env.agent_iter():
+                    obs, reward, termination, truncation, _ = self.env.last()
+                    agent_team = agent.split("_")[0]
+                    
+                    if agent not in observations:
+                        observations[agent] = obs
+                    next_obs = observations.get(agent, obs)
 
-        loss = F.mse_loss(q_values.squeeze(), target_q_values)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+                    if termination or truncation:
+                        action = None
+                        done[agent] = True
+                    else:
+                        if agent_team == "blue":
+                            action = self.select_action(obs)
+                            self.replay_buffer.add(obs, action, reward, next_obs, termination or truncation)
+                            observations[agent] = next_obs
+                            self.step_count += 1
+                            total_reward += reward
+                        else:
+                            action = self.env.action_space("red_0").sample()
 
-    # Move red_final_policy definition outside
-    red_final_policy = lambda obs: get_action(obs, red_final_network)
+                    self.env.step(action)
 
-    # Main training loop
-    train(env, q_network, target_network, optimizer, replay_buffer, red_final_policy, device, config)
+                if self.step_count % self.config.train_freq == 0:
+                    self.optimize_model()
 
-    torch.save(q_network.state_dict(), "blue.pt")
-    print("Training complete. Model saved as 'blue.pt'")
+            # Update epsilon
+            self.epsilon = max(self.config.epsilon_end, self.epsilon * self.config.epsilon_decay)
+
+            # Update target network
+            if self.step_count % self.config.target_update_freq == 0:
+                self.target_network.load_state_dict(self.q_network.state_dict())
+
+            logging.info(f"Episode {episode + 1}/{self.config.num_episodes}, "
+                        f"Total Reward: {total_reward:.2f}, Epsilon: {self.epsilon:.4f}")
+
+            # Save checkpoint
+            if (episode + 1) % self.config.checkpoint_freq == 0:
+                self.save_checkpoint(episode + 1)
+
+        self.save_model()
+
+    def save_checkpoint(self, episode: int):
+        """Save model checkpoint"""
+        checkpoint_path = f"blue_vs_final_checkpoint_{episode}.pt"
+        torch.save(self.q_network.state_dict(), checkpoint_path)
+        logging.info(f"Model checkpoint saved at episode {episode}")
+
+    def save_model(self):
+        """Save final model"""
+        torch.save(self.q_network.state_dict(), "blue_vs_random.pt")
+        logging.info("Training complete. Model saved as 'blue_vs_random.pt'")
+
+def setup_logging():
+    """Setup logging configuration"""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler('training.log'),
+            logging.StreamHandler()
+        ]
+    )
+
+def main():
+    """Main entry point"""
+    setup_logging()
+    config = Config()
+    agent = DQNAgent(config)
+    agent.train()
 
 if __name__ == "__main__":
     main()
