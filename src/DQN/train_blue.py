@@ -8,10 +8,8 @@ from typing import Dict, Tuple, Optional
 from pathlib import Path
 import logging
 from magent2.environments import battle_v4
-from torch_model import QNetwork
+from src.DQN.torch_model import QNetwork
 from torch.utils.data import Dataset, DataLoader
-import time
-import sys
 
 @dataclass
 class Config:
@@ -170,8 +168,12 @@ class DQNAgent:
         print(f"Model checkpoint saved at episode {episode}")
 
     def save_model(self):
-        torch.save(self.q_network.state_dict(), "blue_vs_random.pt")
-        print("Training complete. Model saved as 'blue_vs_random.pt'")
+        weights_dir = Path("weights_models")
+        
+        # Save model
+        model_path = weights_dir / "blue.pt"
+        torch.save(self.q_network.state_dict(), str(model_path))
+        print(f"Training complete. Model saved as '{model_path}'")
 
 def setup_logging():
     logging.basicConfig(

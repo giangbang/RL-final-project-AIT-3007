@@ -1,6 +1,6 @@
 from magent2.environments import battle_v4
-from torch_model import QNetwork
-from final_torch_model import QNetwork as FinalQNetwork
+from src.DQN.torch_model import QNetwork
+from src.DQN.final_torch_model import QNetwork as FinalQNetwork
 import torch
 import numpy as np
 
@@ -17,7 +17,7 @@ def eval():
 
     # Load models
     blue_network = QNetwork(env.observation_space("blue_0").shape, env.action_space("blue_0").n).to(device)
-    blue_network.load_state_dict(torch.load("blue_edge_vnu_v4.pt", map_location=device))
+    blue_network.load_state_dict(torch.load("blue.pt", map_location=device))
     blue_network.eval()
 
     red_network = QNetwork(env.observation_space("red_0").shape, env.action_space("red_0").n).to(device)
