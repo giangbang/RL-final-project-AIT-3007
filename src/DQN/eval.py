@@ -5,8 +5,8 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Callable, Any, List, Tuple
-from .torch_model import QNetwork
-from .final_torch_model import QNetwork as FinalQNetwork
+from src.DQN.torch_model import QNetwork
+from src.DQN.final_torch_model import QNetwork as FinalQNetwork
 
 try:
     from tqdm import tqdm
