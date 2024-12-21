@@ -7,8 +7,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Callable, Any
-from src.DQN.torch_model import QNetwork
-from src.DQN.final_torch_model import QNetwork as FinalQNetwork
+from torch_model import QNetwork
+from final_torch_model import QNetwork as FinalQNetwork
 
 @dataclass
 class Config:
