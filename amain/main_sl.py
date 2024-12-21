@@ -15,13 +15,13 @@ def parse_args() -> argparse.Namespace:
                         help="Random seed for reproducibility")
     parser.add_argument("--learning_rate", type=float, default=1e-3,
                         help="Learning rate for training")
-    parser.add_argument("--batch_size", type=int, default=4,
+    parser.add_argument("--batch_size", type=int, default=8,
                         help="Batch size for training")
     parser.add_argument("--gamma", type=float, default=0.99,
                         help="Discount factor")
-    parser.add_argument("--epsilon_start", type=float, default=0.6,
+    parser.add_argument("--epsilon_start", type=float, default=1.0,
                         help="Starting value of epsilon for epsilon-greedy exploration")
-    parser.add_argument("--epsilon_decay", type=float, default=0.995,
+    parser.add_argument("--epsilon_decay", type=float, default=0.9976,
                         help="Decay rate of epsilon")
     parser.add_argument("--epsilon_min", type=float, default=0.05,
                         help="Minimum value of epsilon")

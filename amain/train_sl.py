@@ -226,7 +226,7 @@ def train(config):
         del episode_transitions
 
         # Train QMIX
-        if len(replay_buffer) >= batch_size and ep>= 64:
+        if len(replay_buffer) >= batch_size and ep>= 40:
                 # batch, ids = rb.sample(batch_size)
                 batch = replay_buffer.sample(batch_size)
                 batch = batch.to(device)
@@ -244,8 +244,8 @@ def train(config):
                 # loss_blue2  = qmix_blue.update(batch_blue, ep)
                 # loss_red2  = qmix_red.update(batch_red,ep)
                 wandb.log({
-                        "loss_blue": (loss_blue1 )/2,
-                        "loss_red": (loss_red1  )/2,
+                        "loss_blue": loss_blue1,
+                        "loss_red": loss_red1,
                         "epsilon": epsilon,
                     })
 
